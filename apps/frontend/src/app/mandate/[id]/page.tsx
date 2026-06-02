@@ -354,8 +354,8 @@ function ActivityCard({
 
               {/* Sim metadata */}
               <div className="flex flex-wrap gap-x-6 gap-y-1.5 text-xs text-[#555]">
-                <span>block <span className="text-[#888] font-mono">{sim.forkBlockNumber.toLocaleString()}</span></span>
-                <span>gas <span className="text-[#888] font-mono">{sim.gasEstimate.toLocaleString()}</span></span>
+                <span>block <span className="text-[#888] font-mono">{(sim.forkBlockNumber ?? 0).toLocaleString()}</span></span>
+                <span>gas <span className="text-[#888] font-mono">{(sim.gasEstimate ?? 0).toLocaleString()}</span></span>
                 <span>
                   calldata hash{" "}
                   <span className="font-mono text-[#666]">{sim.calldataHash.slice(0, 12)}…</span>
@@ -595,12 +595,12 @@ export default function MandatePage() {
           <div className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm">
             <div>
               <div className="text-xs text-[#555] mb-0.5">Reserve Floor</div>
-              <div className="font-medium">${mandate.reserveFloorUsd.toLocaleString()}</div>
+              <div className="font-medium">${(mandate.reserveFloorUsd ?? 0).toLocaleString()}</div>
             </div>
             {mandate.maxSingleActionUsd && (
               <div>
                 <div className="text-xs text-[#555] mb-0.5">Max / Action</div>
-                <div className="font-medium">${mandate.maxSingleActionUsd.toLocaleString()}</div>
+                <div className="font-medium">${(mandate.maxSingleActionUsd ?? 0).toLocaleString()}</div>
               </div>
             )}
             <div>
