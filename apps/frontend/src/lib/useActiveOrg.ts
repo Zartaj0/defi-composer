@@ -206,6 +206,8 @@ export function useActiveOrg() {
         isLoading: false,
         isFallback: false,
       });
+      // Re-ensure the org exists on the backend (silently — handles env changes / new deployments)
+      void ensureBackendOrg(address, chainId, stored.mode, stored.safeAddress);
     } else {
       // No config yet → show "not yet chosen" state so modal can appear
       setOrg({
