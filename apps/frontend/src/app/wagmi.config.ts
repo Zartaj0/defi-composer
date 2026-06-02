@@ -1,14 +1,15 @@
-import { createConfig, http } from "wagmi";
+import { getDefaultConfig } from "@rainbow-me/rainbowkit";
 import { base, baseSepolia } from "wagmi/chains";
 
-// Minimal wagmi config — HTTP transport only, no WalletConnect required.
-// The mandate dashboard is read-only; wallet connection can be added back
-// per-page when needed with a real WalletConnect projectId.
-export const wagmiConfig = createConfig({
+// WalletConnect project ID — set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID in .env
+// Get one free at https://cloud.walletconnect.com
+// Falls back to a placeholder that disables WalletConnect wallet options.
+const projectId =
+  process.env["NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID"] ?? "00000000000000000000000000000000";
+
+export const wagmiConfig = getDefaultConfig({
+  appName: "DeFi Composer",
+  projectId,
   chains: [base, baseSepolia],
-  transports: {
-    [base.id]: http(),
-    [baseSepolia.id]: http(),
-  },
   ssr: true,
 });
