@@ -5,7 +5,7 @@ import { base, baseSepolia } from "wagmi/chains";
 // Get one free at https://cloud.walletconnect.com
 // Falls back to a placeholder that disables WalletConnect wallet options.
 const projectId =
-  process.env["NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID"] ?? "00000000000000000000000000000000";
+  process.env["NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID"] ?? "606c14e6417fd9a07477068b05e1d3a2";
 
 export const wagmiConfig = getDefaultConfig({
   appName: "DeFi Composer",
