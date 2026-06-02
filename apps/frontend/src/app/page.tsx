@@ -139,7 +139,6 @@ export default function HomePage() {
         {view === 'intent' && (
           <IntentScreen
             orgName={activeOrg.name}
-            idleUsd={activeOrg.idleUsd}
             onSubmit={handleIntentSubmit}
           />
         )}

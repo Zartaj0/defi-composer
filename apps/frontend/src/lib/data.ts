@@ -102,6 +102,8 @@ export interface GenStep {
   ms: number;
 }
 
+// Only real orgs that exist in the backend database.
+// Demo/placeholder orgs have been removed — the UI reads live data from the API.
 export const ORGS: Org[] = [
   {
     id: 'org_88e49a1b-976',
@@ -109,59 +111,14 @@ export const ORGS: Org[] = [
     kind: 'Company',
     handle: '88e49a1b',
     avatar: { bg: '#6B8AFF', letter: 'S' },
-    treasuryUsd: 5,
-    managedUsd: 5,
+    treasuryUsd: 0,   // populated at runtime from backend snapshot
+    managedUsd: 0,
     idleUsd: 0,
     governanceThreshold: 'Safe 2-of-3',
     riskCeiling: 10,
     maxAllocPerProtocol: 100,
     benchmarkApy: 0,
     currentApy: 3.18,
-  },
-  {
-    id: 'ens-dao',
-    name: 'ENS DAO',
-    kind: 'DAO',
-    handle: 'ens',
-    avatar: { bg: '#6B8AFF', letter: 'E' },
-    treasuryUsd: 14_200_000,
-    managedUsd: 3_800_000,
-    idleUsd: 10_400_000,
-    governanceThreshold: '100K ENS',
-    riskCeiling: 6,
-    maxAllocPerProtocol: 40,
-    benchmarkApy: 5.3,
-    currentApy: 7.1,
-  },
-  {
-    id: 'index-coop',
-    name: 'Index Coop',
-    kind: 'DAO',
-    handle: 'index',
-    avatar: { bg: '#6EE7A8', letter: 'I' },
-    treasuryUsd: 6_500_000,
-    managedUsd: 2_100_000,
-    idleUsd: 4_400_000,
-    governanceThreshold: '50K INDEX',
-    riskCeiling: 5,
-    maxAllocPerProtocol: 35,
-    benchmarkApy: 5.3,
-    currentApy: 6.4,
-  },
-  {
-    id: 'nova-labs',
-    name: 'Nova Labs',
-    kind: 'Company',
-    handle: 'nova',
-    avatar: { bg: '#FFB547', letter: 'N' },
-    treasuryUsd: 4_200_000,
-    managedUsd: 1_500_000,
-    idleUsd: 2_700_000,
-    governanceThreshold: '3-of-5 Multisig',
-    riskCeiling: 4,
-    maxAllocPerProtocol: 50,
-    benchmarkApy: 5.3,
-    currentApy: 5.9,
   },
 ];
 
