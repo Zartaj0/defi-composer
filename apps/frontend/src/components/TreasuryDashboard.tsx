@@ -40,6 +40,7 @@ interface ApiSnapshot {
 
 interface TreasuryDashboardProps {
   org: Org;
+  safeAddress?: string;
   onCompose: () => void;
 }
 
@@ -83,7 +84,7 @@ function ExitButton({ positionId, initiatedBy, onDone }: { positionId: string; i
   );
 }
 
-export function TreasuryDashboard({ org, onCompose }: TreasuryDashboardProps) {
+export function TreasuryDashboard({ org, safeAddress: _safeAddress, onCompose }: TreasuryDashboardProps) {
   const { address, isConnected } = useAccount();
   const { ethBalance, usdcBalance, ethSymbol, isLoading: balLoading, chainId } = useWalletBalances(address);
 

@@ -13,16 +13,19 @@ import { DeployModal } from '@/components/DeployModal';
 import { TreasuryDashboard } from '@/components/TreasuryDashboard';
 import { MandateDashboard } from '@/components/MandateDashboard';
 import { TweaksPanel, type Tweaks } from '@/components/TweaksPanel';
-import { ORGS, type Org, type Strategy } from '@/lib/data';
+import { TreasuryModeModal } from '@/components/TreasuryModeModal';
+import { useActiveOrg } from '@/lib/useActiveOrg';
+import { type Org, type Strategy } from '@/lib/data';
 
 type View = 'intent' | 'generating' | 'strategies' | 'detail' | 'dashboard' | 'marketplace' | 'reports' | 'mandates';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 export default function HomePage() {
-  const { address: walletAddress } = useAccount();
+  const { address: walletAddress, isConnected } = useAccount();
+  const { org: activeOrg, configure } = useActiveOrg();
+
   const [view, setView] = useState<View>('intent');
-  const [activeOrg, setActiveOrg] = useState<Org>(ORGS[0]);
   const [intentText, setIntentText] = useState('');
   const [capitalUsd, setCapitalUsd] = useState(1_000_000);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
@@ -40,7 +43,6 @@ export default function HomePage() {
     showMonitorTicker: true,
   });
 
-  // Apply tweaks to document
   useEffect(() => {
     const el = document.documentElement;
     el.setAttribute('data-aesthetic', tweaks.aesthetic);
@@ -51,7 +53,6 @@ export default function HomePage() {
       el.setAttribute('data-density', tweaks.density);
     }
     el.style.setProperty('--accent', tweaks.accent);
-    // Recompute accent-soft and accent-line from accent
     const hex = tweaks.accent;
     const r = parseInt(hex.slice(1, 3), 16);
     const g = parseInt(hex.slice(3, 5), 16);
@@ -78,6 +79,7 @@ export default function HomePage() {
           capitalUsd: capital,
           walletAddress,
           orgId: activeOrg.id,
+          safeAddress: activeOrg.safeAddress ?? null,
         }),
       });
 
@@ -94,7 +96,7 @@ export default function HomePage() {
       throw new Error(data?.error ?? `Backend rejected intent parsing with ${res.status}`);
     } catch (err) {
       setIntentId(undefined);
-      setGenerationError(err instanceof Error ? err.message : 'Strategy generation failed before backend intent creation.');
+      setGenerationError(err instanceof Error ? err.message : 'Strategy generation failed.');
     }
   };
 
@@ -108,10 +110,6 @@ export default function HomePage() {
     setView('detail');
   };
 
-  const handleDeploy = () => {
-    setDeployOpen(true);
-  };
-
   const handleNav = (v: View) => {
     setView(v);
     if (v === 'intent') {
@@ -122,14 +120,28 @@ export default function HomePage() {
     }
   };
 
+  // Show mode selector when wallet is connected but user hasn't chosen EOA vs Safe yet
+  const showModeModal = isConnected && !activeOrg.isFallback && activeOrg.mode === null;
+
   return (
     <div className="app">
       <TopNav
         view={view}
         onNav={handleNav}
         activeOrg={activeOrg}
-        onOrgChange={setActiveOrg}
+        onOrgChange={() => {/* controlled by useActiveOrg */}}
         onOpenTweaks={() => setTweaksOpen(v => !v)}
+        onReconfigure={() => {
+          // Clear stored config so TreasuryModeModal re-appears
+          if (walletAddress) {
+            try {
+              const chainId = (window as unknown as { ethereum?: { chainId?: string } }).ethereum?.chainId;
+              const cid = chainId ? parseInt(chainId, 16) : 1;
+              localStorage.removeItem(`defi-composer:org:${cid}:${walletAddress.toLowerCase()}`);
+            } catch {}
+          }
+          window.location.reload();
+        }}
       />
       <ForkModeBanner />
 
@@ -172,7 +184,7 @@ export default function HomePage() {
           <StrategyDetail
             strategy={selectedStrategy}
             capitalUsd={capitalUsd}
-            onDeploy={handleDeploy}
+            onDeploy={() => setDeployOpen(true)}
             onBack={() => setView('strategies')}
           />
         )}
@@ -180,6 +192,7 @@ export default function HomePage() {
         {view === 'dashboard' && (
           <TreasuryDashboard
             org={activeOrg}
+            safeAddress={activeOrg.safeAddress}
             onCompose={() => setView('intent')}
           />
         )}
@@ -197,7 +210,11 @@ export default function HomePage() {
         )}
       </main>
 
-      {/* Deploy Modal */}
+      {/* Mode selector — appears once after wallet connects */}
+      {showModeModal && (
+        <TreasuryModeModal onConfigure={configure} />
+      )}
+
       {deployOpen && selectedStrategy && (
         <DeployModal
           strategy={selectedStrategy}
@@ -212,7 +229,6 @@ export default function HomePage() {
         />
       )}
 
-      {/* Tweaks Panel */}
       {tweaksOpen && (
         <TweaksPanel
           tweaks={tweaks}
@@ -224,7 +240,6 @@ export default function HomePage() {
   );
 }
 
-// Simple placeholder for Marketplace view
 function MarketplacePlaceholder({ onCompose }: { onCompose: () => void }) {
   return (
     <div className="page fade-in">
@@ -235,7 +250,7 @@ function MarketplacePlaceholder({ onCompose }: { onCompose: () => void }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
         {[
-          { name: 'Steakhouse Financial', desc: 'Conservative USDC yield strategies, curated by Steakhouse Financial', apy: '8.4–9.1%', tvl: '$142M', tag: 'Verified' },
+          { name: 'Steakhouse Financial', desc: 'Conservative USDC yield strategies', apy: '8.4–9.1%', tvl: '$142M', tag: 'Verified' },
           { name: 'Block Analitica', desc: 'Risk-adjusted multi-protocol allocation models', apy: '7.2–11.4%', tvl: '$89M', tag: 'Audited' },
           { name: 'Chaos Labs', desc: 'Quantitative parameter optimization for Aave and Morpho', apy: '6.8–8.9%', tvl: '$55M', tag: 'New' },
         ].map(c => (
@@ -255,9 +270,7 @@ function MarketplacePlaceholder({ onCompose }: { onCompose: () => void }) {
                 <div className="mono" style={{ fontSize: 14 }}>{c.tvl}</div>
               </div>
             </div>
-            <button className="btn btn-primary" style={{ justifyContent: 'center' }} onClick={onCompose}>
-              Use Strategy
-            </button>
+            <button className="btn btn-primary" style={{ justifyContent: 'center' }} onClick={onCompose}>Use Strategy</button>
           </div>
         ))}
       </div>
@@ -265,7 +278,6 @@ function MarketplacePlaceholder({ onCompose }: { onCompose: () => void }) {
   );
 }
 
-// Simple placeholder for Reports view
 function ReportsPlaceholder({ org }: { org: Org }) {
   return (
     <div className="page fade-in">
@@ -279,7 +291,6 @@ function ReportsPlaceholder({ org }: { org: Org }) {
           { name: 'Q1 2026 Treasury Report', date: 'Mar 31, 2026', size: '142 KB', type: 'PDF' },
           { name: 'Q4 2025 Treasury Report', date: 'Dec 31, 2025', size: '138 KB', type: 'PDF' },
           { name: 'Fee Accrual Statement — April 2026', date: 'Apr 30, 2026', size: '24 KB', type: 'CSV' },
-          { name: 'Risk Audit Export — 2025', date: 'Jan 1, 2026', size: '89 KB', type: 'PDF' },
         ].map(r => (
           <div key={r.name} className="card card-pad" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <div style={{ flex: 1 }}>
@@ -289,13 +300,7 @@ function ReportsPlaceholder({ org }: { org: Org }) {
               </div>
             </div>
             <span className="tag">{r.type}</span>
-            <button className="btn btn-sm">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
-                <path d="M7 1.5V9M7 9L4.5 6.5M7 9L9.5 6.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M2 11.5H12" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-              Download
-            </button>
+            <button className="btn btn-sm">Download</button>
           </div>
         ))}
       </div>

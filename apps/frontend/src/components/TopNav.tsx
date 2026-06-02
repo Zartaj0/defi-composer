@@ -2,22 +2,25 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
-import { IconLogo, IconChev, IconCheck, IconSafe } from '@/lib/icons';
-import { ORGS, type Org } from '@/lib/data';
+import { IconLogo, IconChev, IconSafe } from '@/lib/icons';
+import { type ActiveOrg } from '@/lib/useActiveOrg';
+import { type Org } from '@/lib/data';
 
 type View = 'intent' | 'generating' | 'strategies' | 'detail' | 'dashboard' | 'marketplace' | 'reports' | 'mandates';
 
 interface TopNavProps {
   view: View;
   onNav: (v: View) => void;
-  activeOrg: Org;
+  activeOrg: Org | ActiveOrg;
   onOrgChange: (org: Org) => void;
   onOpenTweaks: () => void;
+  onReconfigure?: () => void;
 }
 
-export function TopNav({ view, onNav, activeOrg, onOrgChange, onOpenTweaks }: TopNavProps) {
+export function TopNav({ view, onNav, activeOrg, onOrgChange, onOpenTweaks, onReconfigure }: TopNavProps) {
   const [orgOpen, setOrgOpen] = useState(false);
   const orgRef = useRef<HTMLDivElement>(null);
+  const isActiveOrg = 'mode' in activeOrg;
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -45,7 +48,7 @@ export function TopNav({ view, onNav, activeOrg, onOrgChange, onOpenTweaks }: To
         <span className="tag" style={{ marginLeft: 2 }}>beta</span>
       </div>
 
-      {/* Org Switcher */}
+      {/* Treasury context pill */}
       <div
         className="orgswitch"
         ref={orgRef}
@@ -58,8 +61,16 @@ export function TopNav({ view, onNav, activeOrg, onOrgChange, onOpenTweaks }: To
           {activeOrg.avatar.letter}
         </div>
         <div className="meta">
-          <div className="name">{activeOrg.name}</div>
-          <div className="kind">{activeOrg.kind}</div>
+          <div className="name" style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {activeOrg.name}
+          </div>
+          <div className="kind">
+            {isActiveOrg && (activeOrg as import('@/lib/useActiveOrg').ActiveOrg).mode === 'safe'
+              ? 'Safe treasury'
+              : isActiveOrg && (activeOrg as import('@/lib/useActiveOrg').ActiveOrg).mode === 'eoa'
+              ? 'Personal wallet'
+              : activeOrg.kind}
+          </div>
         </div>
         <div className="chev">
           <IconChev size={12} />
@@ -67,35 +78,32 @@ export function TopNav({ view, onNav, activeOrg, onOrgChange, onOpenTweaks }: To
 
         {orgOpen && (
           <div className="menu">
-            {ORGS.map(org => (
-              <div
-                key={org.id}
-                className={`item ${org.id === activeOrg.id ? 'active' : ''}`}
-                onClick={(e) => { e.stopPropagation(); onOrgChange(org); setOrgOpen(false); }}
-              >
-                <div className="avatar" style={{ background: org.avatar.bg, width: 24, height: 24, borderRadius: 4, display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 600, fontFamily: 'var(--font-mono)', color: '#0A0B0D', flexShrink: 0 }}>
-                  {org.avatar.letter}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 500, fontSize: 12 }}>{org.name}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-                    ${(org.treasuryUsd / 1_000_000).toFixed(1)}M treasury · {org.kind}
-                  </div>
-                </div>
-                {org.id === activeOrg.id && (
-                  <span style={{ color: 'var(--accent)' }}><IconCheck size={12} /></span>
-                )}
+            <div style={{ padding: '8px 12px 4px', fontSize: 11, color: 'var(--text-faint)', borderBottom: '1px solid var(--border)', marginBottom: 4 }}>
+              Treasury context
+            </div>
+            <div className="item active">
+              <div className="avatar" style={{ background: activeOrg.avatar.bg, width: 24, height: 24, borderRadius: 4, display: 'grid', placeItems: 'center', fontSize: 10, fontWeight: 600, fontFamily: 'var(--font-mono)', color: '#0A0B0D', flexShrink: 0 }}>
+                {activeOrg.avatar.letter}
               </div>
-            ))}
-              <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0', paddingTop: 4 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 500, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activeOrg.name}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{activeOrg.id}</div>
+              </div>
+            </div>
+            <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0', paddingTop: 4 }}>
+              {onReconfigure && (
+                <div
+                  className="item"
+                  onClick={(e) => { e.stopPropagation(); setOrgOpen(false); onReconfigure(); }}
+                >
+                  <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>⚙ Switch mode / Safe address</span>
+                </div>
+              )}
               <div
                 className="item"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  window.location.href = "/onboarding";
-                }}
+                onClick={(e) => { e.stopPropagation(); window.location.href = '/onboarding'; }}
               >
-                <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>+ Add organization</span>
+                <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>+ New organization</span>
               </div>
             </div>
           </div>
