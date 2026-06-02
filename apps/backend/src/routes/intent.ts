@@ -365,6 +365,9 @@ async function parseIntentWithLLM(
 
   if (client) {
     try {
+      // 8-second hard timeout so a hung provider doesn't stall the HTTP response
+      const llmResult = await Promise.race([
+        (async () => {
       const systemPrompt = `
 You are an intent parser for an institutional DeFi treasury management system.
 Parse the user's investment intent into structured JSON. Be conservative:
@@ -409,6 +412,11 @@ Return ONLY valid JSON with no markdown:
         const parsed = JSON.parse(jsonMatch[0]);
         return { id: uuidv4(), rawInput, capitalUsd, preferredChain: 8453, createdAt: new Date(), ...parsed } as UserIntent;
       }
+      return null;
+        })(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
+      ]);
+      if (llmResult) return llmResult;
     } catch (err) {
       console.warn("[Intent] LLM parse failed, falling back to rule-based parser:", err instanceof Error ? err.message : err);
     }
