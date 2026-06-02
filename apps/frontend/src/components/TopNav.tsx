@@ -1,9 +1,8 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { useAccount } from 'wagmi';
+import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { IconLogo, IconChev, IconCheck, IconSafe } from '@/lib/icons';
-import { shortAddr } from '@/lib/utils';
 import { ORGS, type Org } from '@/lib/data';
 
 type View = 'intent' | 'generating' | 'strategies' | 'detail' | 'dashboard' | 'marketplace' | 'reports' | 'mandates';
@@ -19,7 +18,6 @@ interface TopNavProps {
 export function TopNav({ view, onNav, activeOrg, onOrgChange, onOpenTweaks }: TopNavProps) {
   const [orgOpen, setOrgOpen] = useState(false);
   const orgRef = useRef<HTMLDivElement>(null);
-  const { address, isConnected } = useAccount();
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -127,14 +125,55 @@ export function TopNav({ view, onNav, activeOrg, onOrgChange, onOpenTweaks }: To
         </svg>
       </button>
 
-      {/* Wallet — shows connected address if available, no-op otherwise */}
-      {isConnected && address ? (
-        <div className="walletpill">
-          <span className="dot" />
-          <IconSafe size={13} />
-          <span className="mono" style={{ fontSize: 12 }}>{shortAddr(address)}</span>
-        </div>
-      ) : null}
+      {/* Wallet */}
+      <ConnectButton.Custom>
+        {({ account, chain, openAccountModal, openChainModal, openConnectModal, mounted }) => {
+          const ready = mounted;
+          const connected = ready && account && chain;
+          return (
+            <div
+              {...(!ready && {
+                'aria-hidden': true,
+                style: { opacity: 0, pointerEvents: 'none', userSelect: 'none' },
+              })}
+            >
+              {!connected ? (
+                <button className="btn btn-primary btn-sm" onClick={openConnectModal} type="button">
+                  Connect Wallet
+                </button>
+              ) : chain.unsupported ? (
+                <button className="btn btn-sm" style={{ background: 'var(--neg)', color: '#fff', border: 'none' }} onClick={openChainModal} type="button">
+                  Wrong network
+                </button>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <button
+                    className="btn btn-sm btn-ghost"
+                    onClick={openChainModal}
+                    style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, padding: '4px 8px' }}
+                    type="button"
+                  >
+                    {chain.hasIcon && chain.iconUrl && (
+                      <img src={chain.iconUrl} alt={chain.name ?? 'chain'} style={{ width: 12, height: 12, borderRadius: '50%' }} />
+                    )}
+                    {chain.name}
+                  </button>
+                  <button
+                    className="walletpill"
+                    onClick={openAccountModal}
+                    type="button"
+                    style={{ cursor: 'pointer', border: 'none', background: 'none', padding: 0 }}
+                  >
+                    <span className="dot" />
+                    <IconSafe size={13} />
+                    <span className="mono" style={{ fontSize: 12 }}>{account.displayName}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        }}
+      </ConnectButton.Custom>
     </nav>
   );
 }
