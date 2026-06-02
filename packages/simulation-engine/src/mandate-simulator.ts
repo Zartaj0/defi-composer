@@ -21,7 +21,7 @@
 //   - pass/fail + reason
 // ============================================================
 
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID as uuidv4 } from "node:crypto";
 import { parseUnits } from "viem";
 import {
   startFork,
