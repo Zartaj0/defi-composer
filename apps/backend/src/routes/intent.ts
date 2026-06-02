@@ -8,8 +8,8 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
-import { LLMClient } from "@defi-composer/strategy-engine";
-import { Queue } from "bullmq";
+import { LLMClient, StrategyPlanner } from "@defi-composer/strategy-engine";
+import { RiskEngine } from "@defi-composer/risk-engine";
 import {
   createIntent,
   getIntent,
@@ -17,16 +17,14 @@ import {
   getOrg,
   createOrg,
   addTreasuryWallet,
+  updateIntentStatus,
+  storeCandidates,
 } from "@defi-composer/db";
 import type { UserIntent, ApiResponse, CandidateStrategy } from "@defi-composer/shared";
 
-const REDIS_URL = process.env["REDIS_URL"] ?? "redis://localhost:6379";
-const plannerQueue = new Queue("strategy-planning", {
-  connection: {
-    host: new URL(REDIS_URL).hostname,
-    port: parseInt(new URL(REDIS_URL).port || "6379"),
-  },
-});
+// Singleton planner + risk engine (warm up once, reuse across requests)
+const planner = new StrategyPlanner();
+const riskEngine = new RiskEngine();
 
 // ─── Input validation ─────────────────────────────────────────────────────────
 const ParseIntentBody = z.object({
@@ -141,30 +139,13 @@ export const intentRoutes: FastifyPluginAsync = async (app) => {
           submittedBy: walletAddress,
         });
 
-        // ── Step 4: Enqueue planning job ──────────────────────────────────────
-        const job = await plannerQueue.add(
-          "generate-strategies",
-          {
-            intentId,
-            intent,
-            orgId,
-            maxCandidates: 3,
-          },
-          {
-            attempts: 2,
-            backoff: { type: "exponential", delay: 5_000 },
-          }
-        );
+        // ── Step 4: Generate strategies inline (no Redis/BullMQ required) ──────
+        // Fire-and-forget — frontend polls GET /intent/:id for status updates
+        void runPlannerInline(intentId, intent, orgId).catch((err) => {
+          app.log.error({ err, intentId }, "Inline planner failed");
+        });
 
-        // Store job ID in intent record for polling
-        await import("@defi-composer/db").then(({ updateIntentStatus }) =>
-          updateIntentStatus(intentId, "received", { jobId: job.id ?? null })
-        );
-
-        app.log.info(
-          { intentId, jobId: job.id, orgId },
-          "Intent received and planning job queued"
-        );
+        app.log.info({ intentId, orgId }, "Intent received, planner started");
 
         const response: ApiResponse<{
           intentId: string;
@@ -176,7 +157,7 @@ export const intentRoutes: FastifyPluginAsync = async (app) => {
           success: true,
           data: {
             intentId,
-            jobId: job.id,
+            jobId: undefined,
             orgId,
             intent,
             statusUrl: `/api/v1/intent/${intentId}`,
@@ -296,6 +277,74 @@ export const intentRoutes: FastifyPluginAsync = async (app) => {
     }
   );
 };
+
+// ─── Inline planner (replaces BullMQ worker — no Redis required) ─────────────
+async function runPlannerInline(
+  intentId: string,
+  intent: UserIntent,
+  orgId: string,
+  maxCandidates = 3
+): Promise<void> {
+  await updateIntentStatus(intentId, "planning");
+
+  const org = await getOrg(orgId);
+  if (!org) {
+    await updateIntentStatus(intentId, "failed");
+    return;
+  }
+
+  const constrainedIntent: UserIntent = {
+    ...intent,
+    allowLeverage: intent.allowLeverage && org.riskParams.allowLeverage,
+    allowLiquidationRisk: intent.allowLiquidationRisk && org.riskParams.allowLiquidationRisk,
+  };
+
+  const rawCandidates = await planner.generateCandidates(constrainedIntent);
+  const generationInfo = planner.getLastGenerationInfo();
+  const modelUsed = `${generationInfo.provider}:${generationInfo.model}`;
+  const startedAt = Date.now();
+
+  const scoredCandidates = await Promise.all(
+    rawCandidates.map(async (candidate) => {
+      const riskScore = await riskEngine.assess(candidate.graph, constrainedIntent, constrainedIntent.capitalUsd);
+      return { ...candidate, riskScore };
+    })
+  );
+
+  const { approvedProtocols } = org.riskParams;
+  const protocolFiltered = approvedProtocols.length > 0
+    ? scoredCandidates.filter((c) => c.graph.nodes.every((n) => approvedProtocols.includes(n.protocol)))
+    : scoredCandidates;
+
+  const validCandidates = protocolFiltered
+    .filter((c) => c.riskScore.blockers.length === 0)
+    .slice(0, maxCandidates);
+
+  const generationMs = Date.now() - startedAt;
+
+  if (validCandidates.length > 0) {
+    await storeCandidates(
+      validCandidates.map((c, i) => ({
+        id: c.id,
+        intentId,
+        orgId,
+        candidate: c,
+        rank: i + 1,
+        estimatedApyBps: c.graph.estimatedApyBps,
+        riskLevel: c.riskScore.overallLevel,
+        recommended: c.recommended ? 1 : 0,
+        modelUsed,
+        generationMs,
+      }))
+    );
+  }
+
+  await updateIntentStatus(
+    intentId,
+    validCandidates.length > 0 ? "ready" : "failed",
+    { candidateCount: validCandidates.length }
+  );
+}
 
 // ─── LLM intent parser with deterministic fallback ───────────────────────────
 let parsingClient: LLMClient | null = null;

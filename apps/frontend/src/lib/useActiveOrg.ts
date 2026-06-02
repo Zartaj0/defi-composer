@@ -142,7 +142,7 @@ async function ensureBackendOrg(
       body: JSON.stringify({
         id: orgId,
         name,
-        type: mode === 'safe' ? 'dao' : 'company',
+        type: mode === 'safe' ? 'dao' : 'individual',
         walletAddress: address,
         safeAddress: safeAddress ?? null,
         riskProfile: 'moderate',
