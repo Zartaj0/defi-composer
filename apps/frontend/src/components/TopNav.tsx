@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount } from 'wagmi';
 import { IconLogo, IconChev, IconCheck, IconSafe } from '@/lib/icons';
 import { shortAddr } from '@/lib/utils';
@@ -128,31 +127,14 @@ export function TopNav({ view, onNav, activeOrg, onOrgChange, onOpenTweaks }: To
         </svg>
       </button>
 
-      {/* Wallet */}
-      <ConnectButton.Custom>
-        {({ account, chain, openAccountModal, openConnectModal, mounted }) => {
-          const ready = mounted;
-          if (!ready) return null;
-
-          if (isConnected && account) {
-            return (
-              <button className="walletpill" onClick={openAccountModal}>
-                <span className="dot" />
-                <IconSafe size={13} />
-                <span className="mono" style={{ fontSize: 12 }}>
-                  {shortAddr(account.address)}
-                </span>
-              </button>
-            );
-          }
-
-          return (
-            <button className="btn btn-sm" onClick={openConnectModal}>
-              Connect Wallet
-            </button>
-          );
-        }}
-      </ConnectButton.Custom>
+      {/* Wallet — shows connected address if available, no-op otherwise */}
+      {isConnected && address ? (
+        <div className="walletpill">
+          <span className="dot" />
+          <IconSafe size={13} />
+          <span className="mono" style={{ fontSize: 12 }}>{shortAddr(address)}</span>
+        </div>
+      ) : null}
     </nav>
   );
 }

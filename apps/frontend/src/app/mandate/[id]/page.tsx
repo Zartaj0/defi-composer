@@ -605,12 +605,12 @@ export default function MandatePage() {
             )}
             <div>
               <div className="text-xs text-[#555] mb-0.5">Approved Assets</div>
-              <div className="font-mono text-xs text-[#aaa]">{mandate.approvedAssets.join(", ")}</div>
+              <div className="font-mono text-xs text-[#aaa]">{(mandate.approvedAssets ?? []).join(", ")}</div>
             </div>
             <div>
               <div className="text-xs text-[#555] mb-0.5">Approved Protocols</div>
               <div className="flex flex-wrap gap-1.5">
-                {mandate.approvedProtocols.map(p => (
+                {(mandate.approvedProtocols ?? []).map(p => (
                   <span key={p} className="px-2 py-0.5 bg-[#1a1a1a] border border-[#333] rounded text-xs text-[#aaa]">{p}</span>
                 ))}
               </div>
@@ -619,7 +619,7 @@ export default function MandatePage() {
           <div>
             <div className="text-xs text-[#555] mb-2">Approved Actions</div>
             <div className="flex flex-wrap gap-2">
-              {mandate.approvedActions.map(a => (
+              {(mandate.approvedActions ?? []).map(a => (
                 <span key={a} className="px-2 py-0.5 bg-violet-500/10 border border-violet-500/20 rounded text-xs text-violet-300">{a}</span>
               ))}
             </div>
