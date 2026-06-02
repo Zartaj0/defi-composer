@@ -1,0 +1,6 @@
+{
+  "buildCommand": "pnpm turbo build --filter=@defi-composer/frontend",
+  "outputDirectory": "apps/frontend/.next",
+  "framework": "nextjs",
+  "installCommand": "pnpm install"
+}

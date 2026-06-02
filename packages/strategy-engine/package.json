@@ -1,0 +1,27 @@
+{
+  "name": "@defi-composer/strategy-engine",
+  "version": "0.1.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@defi-composer/shared": "workspace:*",
+    "@defi-composer/protocol-adapters": "workspace:*",
+    "openai": "^4.52.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

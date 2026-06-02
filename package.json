@@ -1,0 +1,38 @@
+{
+  "name": "defi-composer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Autonomous DeFi Strategy Composer — AI-native strategy orchestration",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "clean": "turbo run clean && rm -rf node_modules",
+    "type-check": "turbo run type-check",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
+    "verify:fork": "node scripts/verify-fork.mjs",
+    "verify:fork:sepolia": "CHAIN_ID=84532 BASE_RPC_URL=https://sepolia.base.org ANVIL_BASE_PORT=19100 node scripts/verify-fork.mjs",
+    "seed:sepolia": "node scripts/seed-sepolia.mjs",
+    "test:e2e:sepolia": "node scripts/test-e2e-sepolia.mjs",
+    "test:e2e:module": "node scripts/test-e2e-module.mjs",
+    "test:e2e:module:execute": "node scripts/test-e2e-module.mjs --execute",
+    "start:services": "node scripts/start-services.mjs",
+    "start:services:sepolia": "node scripts/start-services.mjs --sepolia",
+    "start:all": "concurrently \"pnpm start:services\" \"pnpm --filter @defi-composer/frontend start\"",
+    "start:all:sepolia": "concurrently \"pnpm start:services:sepolia\" \"pnpm --filter @defi-composer/frontend start\"",
+    "backfill": "node scripts/backfill-positions.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "concurrently": "^9.2.1",
+    "prettier": "^3.2.0",
+    "turbo": "^2.0.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.0.0"
+}

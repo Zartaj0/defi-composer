@@ -1,0 +1,150 @@
+{
+  "timestamp": "2026-05-31T05:03:35.267Z",
+  "crashed": false,
+  "environment": {
+    "FORK_RPC_URL": "http://127.0.0.1:18100",
+    "BASE_RPC_URL": "https://mainnet.base.org",
+    "FORK_MODE": "true",
+    "ANVIL_BIN": "anvil"
+  },
+  "summary": {
+    "total": 9,
+    "correct": 9,
+    "allCorrect": true
+  },
+  "results": [
+    {
+      "id": "aave-supply-usdc",
+      "label": "Aave V3 — supply 1,000 USDC",
+      "correct": true,
+      "ms": 5768,
+      "outcome": "PASS",
+      "block": 46707219,
+      "validUntil": 46707519,
+      "gas": 279306,
+      "calldataHash": "0x9e0795dbb50f60d5bdbf8688dc6e76ad97150ccf0928d60c43e0280ed0d1c994",
+      "deltas": {
+        "USDC_spent": "-1000000000",
+        "aUSDC_received": "999999999"
+      },
+      "reason": null
+    },
+    {
+      "id": "aave-withdraw-usdc",
+      "label": "Aave V3 — withdraw 500 USDC (roundtrip)",
+      "correct": true,
+      "ms": 364,
+      "outcome": "PASS",
+      "block": 46707221,
+      "validUntil": 46707521,
+      "gas": 172212,
+      "calldataHash": "0x68e1a40fcf9f20aea8a4cabaedbee22d2cf2e7b029fc0b46e31add0f5f053fc0",
+      "deltas": {
+        "USDC_received": "500000000",
+        "aUSDC_spent": "-1999999999"
+      },
+      "reason": null
+    },
+    {
+      "id": "uniswap-weth-usdc",
+      "label": "Uniswap V3 — swap 0.1 WETH → USDC",
+      "correct": true,
+      "ms": 2316,
+      "outcome": "PASS",
+      "block": 46707224,
+      "validUntil": 46707524,
+      "gas": 168533,
+      "calldataHash": "0xae51e8c0adebbabd15c2694fc72802a32013007aad62a9a487b4099d8821342a",
+      "deltas": {
+        "WETH_spent": "-100000000000000000",
+        "USDC_received": "203022670",
+        "slippage_pct": "-0.0079"
+      },
+      "reason": null
+    },
+    {
+      "id": "morpho-deposit-usdc",
+      "label": "Morpho Steakhouse — deposit 500 USDC (ERC-4626)",
+      "correct": true,
+      "ms": 9158,
+      "outcome": "PASS",
+      "block": 46707226,
+      "validUntil": 46707526,
+      "gas": 408659,
+      "calldataHash": "0x7518b446b7ed5979f570fc8a683b3dbf96d86df4abd557364487d6d4804572cc",
+      "deltas": {
+        "USDC_spent": "-500000000",
+        "morpho_shares_received": "464530984684162304284"
+      },
+      "reason": null
+    },
+    {
+      "id": "morpho-withdraw-usdc",
+      "label": "Morpho Steakhouse — withdraw 250 USDC (ERC-4626)",
+      "correct": true,
+      "ms": 31,
+      "outcome": "PASS",
+      "block": 46707228,
+      "validUntil": 46707528,
+      "gas": 299142,
+      "calldataHash": "0xc81b9f28dbf16c91d6b4db3f692c7c10f4adc5e461e30f48991d0b9cbe6f6636",
+      "deltas": {
+        "morpho_shares_spent": "-696796477026243456426",
+        "USDC_received": "749999999"
+      },
+      "reason": null
+    },
+    {
+      "id": "policy-reserve-floor",
+      "label": "Policy — reserve floor breach blocked",
+      "correct": true,
+      "ms": 2,
+      "outcome": "BLOCKED",
+      "block": null,
+      "validUntil": null,
+      "gas": null,
+      "calldataHash": null,
+      "deltas": null,
+      "reason": "POLICY_BLOCKED: Action would breach reserve floor: liquidUsdAfter=$99000.00 reserveFloorUsd=$99500.00"
+    },
+    {
+      "id": "policy-no-state",
+      "label": "Policy — missing observedState blocked",
+      "correct": true,
+      "ms": 0,
+      "outcome": "BLOCKED",
+      "block": null,
+      "validUntil": null,
+      "gas": null,
+      "calldataHash": null,
+      "deltas": null,
+      "reason": "POLICY_BLOCKED: Observed liquid treasury value is required to enforce reserveFloorUsd"
+    },
+    {
+      "id": "policy-blocked-action",
+      "label": "Policy — explicitly blocked action",
+      "correct": true,
+      "ms": 0,
+      "outcome": "BLOCKED",
+      "block": null,
+      "validUntil": null,
+      "gas": null,
+      "calldataHash": null,
+      "deltas": null,
+      "reason": "POLICY_BLOCKED: Action 'supply' is explicitly blocked by mandate"
+    },
+    {
+      "id": "policy-unapproved-protocol",
+      "label": "Policy — unapproved protocol blocked",
+      "correct": true,
+      "ms": 0,
+      "outcome": "BLOCKED",
+      "block": null,
+      "validUntil": null,
+      "gas": null,
+      "calldataHash": null,
+      "deltas": null,
+      "reason": "POLICY_BLOCKED: Protocol 'uniswap-v3' is not in mandate approvedProtocols"
+    }
+  ]
+}

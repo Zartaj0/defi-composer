@@ -1,0 +1,27 @@
+{
+  "name": "@defi-composer/monitor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@defi-composer/db": "workspace:*",
+    "@defi-composer/protocol-adapters": "workspace:*",
+    "@defi-composer/shared": "workspace:*",
+    "@defi-composer/simulation-engine": "workspace:*",
+    "bullmq": "^5.7.0",
+    "dotenv": "^16.4.5",
+    "ioredis": "^5.10.1",
+    "viem": "^2.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.11.0",
+    "typescript": "^5.4.0"
+  }
+}

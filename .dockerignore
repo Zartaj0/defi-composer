@@ -1,0 +1,42 @@
+# Git
+.git
+.gitignore
+
+# Env files (secrets go in Railway dashboard, not image)
+.env
+.env.*
+!.env.railway
+
+# Frontend and other apps not needed by backend
+apps/frontend
+apps/monitor
+apps/planner
+apps/executor
+
+# Services (executor runs separately)
+services/
+
+# Node modules (installed fresh in Docker)
+node_modules
+**/node_modules
+
+# Build artifacts (rebuilt in Docker)
+dist
+**/.next
+**/.turbo
+
+# Contracts (not needed at runtime)
+contracts/
+
+# Scripts (not needed at runtime)
+scripts/
+
+# Test files
+**/*.test.ts
+**/*.spec.ts
+**/coverage
+
+# Misc
+*.md
+.DS_Store
+*.log
