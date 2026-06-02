@@ -227,12 +227,12 @@ export function MandateDashboard({ orgId }: MandateDashboardProps) {
                     fontFamily: "var(--font-mono)",
                   }}
                 >
-                  <span>Reserve: ${m.reserveFloorUsd.toLocaleString()}</span>
+                  <span>Reserve: ${(m.reserveFloorUsd ?? 0).toLocaleString()}</span>
                   <span>Risk: {m.riskBudgetPct}%</span>
                   <span>
-                    Protocols: {m.approvedProtocols.slice(0, 3).join(", ")}
-                    {m.approvedProtocols.length > 3
-                      ? ` +${m.approvedProtocols.length - 3}`
+                    Protocols: {(m.approvedProtocols ?? []).slice(0, 3).join(", ")}
+                    {(m.approvedProtocols ?? []).length > 3
+                      ? ` +${(m.approvedProtocols ?? []).length - 3}`
                       : ""}
                   </span>
                 </div>
