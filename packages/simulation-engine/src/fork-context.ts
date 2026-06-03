@@ -44,6 +44,23 @@ export const BASE_CONTRACTS = {
   SAFE_COMPAT_FALLBACK: "0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99" as `0x${string}`,
 } as const;
 
+// ─── Ethereum mainnet addresses (used by contract.dev stagenet, chainId 52638) ──
+// contract.dev is a fork of Ethereum mainnet — same addresses as mainnet.
+export const ETH_MAINNET_CONTRACTS = {
+  USDC:           "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as `0x${string}`,
+  WETH:           "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" as `0x${string}`,
+  AAVE_POOL:      "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2" as `0x${string}`,
+  AAVE_DATA_PROV: "0x7B4EB56E7CD4b454BA8ff71E4518426369a138a3" as `0x${string}`,
+  MORPHO:         "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb" as `0x${string}`,
+  MORPHO_STEAKHOUSE_USDC: "0xBEEF01735c132Ada46AA9aA4c54623cAA92A64CB" as `0x${string}`,
+  UNISWAP_V3_ROUTER:      "0xE592427A0AEce92De3Edee1F18E0157C05861564" as `0x${string}`,
+  UNISWAP_V3_QUOTER:      "0x61fFE014bA17989E743c5F6cB21bF9697530B21e" as `0x${string}`,
+  // Safe deterministic addresses are the same on all chains
+  SAFE_PROXY_FACTORY: "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67" as `0x${string}`,
+  SAFE_SINGLETON:     "0x41675C099F32341bf84BFc5382aF534df5C7461a" as `0x${string}`,
+  SAFE_COMPAT_FALLBACK: "0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99" as `0x${string}`,
+} as const;
+
 // ─── Base Sepolia testnet addresses ───────────────────────────
 // Aave V3 Base Sepolia: https://docs.aave.com/developers/deployed-contracts/v3-testnet-addresses
 // Safe contracts share deterministic addresses across chains.
@@ -67,7 +84,10 @@ export type ChainContracts = typeof BASE_CONTRACTS;
 
 /** Returns contracts for the active chain (CHAIN_ID env, default 8453). */
 export function getActiveContracts(): ChainContracts {
-  return getActiveChainId() === 84532 ? BASE_SEPOLIA_CONTRACTS : BASE_CONTRACTS;
+  const id = getActiveChainId();
+  if (id === 84532) return BASE_SEPOLIA_CONTRACTS;
+  if (id === 52638) return ETH_MAINNET_CONTRACTS;  // contract.dev stagenet (Ethereum mainnet fork)
+  return BASE_CONTRACTS;
 }
 
 /** Returns the active chain ID (CHAIN_ID env, default 8453). */
@@ -79,10 +99,13 @@ export function getActiveChainId(): number {
 // USDC mainnet (FiatToken V2.2): balances mapping at slot 9
 // USDC Sepolia (Aave MintableERC20 / OZ ERC20): balances mapping at slot 0
 // WETH (canonical OP-stack WETH at 0x4200...0006): balances at slot 3
+// WETH (Ethereum mainnet WETH9 at 0xC02a...): balances at slot 3
 const TOKEN_BALANCE_SLOTS: Record<string, number> = {
-  "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": 9,  // USDC mainnet
+  "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": 9,  // USDC Base mainnet (FiatToken V2.2)
+  "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": 9,  // USDC Ethereum mainnet (FiatToken V2.2, same slot)
   "0xba50cd2a20f6da35d788639e581bca8d0b5d4d5f": 0,  // USDC Base Sepolia (OZ ERC20)
   "0x4200000000000000000000000000000000000006": 3,  // WETH (all OP-stack chains)
+  "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": 3,  // WETH9 Ethereum mainnet
 };
 
 export const ERC20_BALANCE_ABI = [

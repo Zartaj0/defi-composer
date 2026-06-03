@@ -16,7 +16,7 @@
 
 import { randomUUID } from "node:crypto";
 import { createPublicClient, http, type Address } from "viem";
-import { base, baseSepolia } from "viem/chains";
+import { base, baseSepolia, mainnet } from "viem/chains";
 import {
   listOrgs,
   getActiveMandateForOrg,
@@ -60,8 +60,10 @@ const MAX_CONCURRENT_SIMS = 2; // max parallel Anvil forks
 // ─── Chain-aware addresses ────────────────────────────────────
 
 const AUSDC_BY_CHAIN: Record<number, Address> = {
-  8453: "0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB",
-  84532: "0x10F1A9D11CDf50041f3f8cB7191CBE2f31750ACC",
+  8453:  "0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB",  // aUSDC Base mainnet (Aave V3)
+  84532: "0x10F1A9D11CDf50041f3f8cB7191CBE2f31750ACC",  // aUSDC Base Sepolia (Aave V3)
+  52638: "0x98C23E9d8f34FEFb1B7BD6a91B7AF122a1f5cE47",  // aUSDC Ethereum mainnet = contract.dev stagenet
+  1:     "0x98C23E9d8f34FEFb1B7BD6a91B7AF122a1f5cE47",  // aUSDC Ethereum mainnet
 };
 
 const ERC20_ABI = [
@@ -77,7 +79,13 @@ const ERC20_ABI = [
 // ─── Viem client ──────────────────────────────────────────────
 
 const activeChainId = getActiveChainId();
-const activeChain = activeChainId === 84532 ? baseSepolia : base;
+// contract.dev stagenet (52638) is a fork of Ethereum mainnet — use `mainnet` chain type
+// so viem uses EIP-155 Ethereum transaction format (not OP-stack).
+const activeChain =
+  activeChainId === 84532 ? baseSepolia :
+  activeChainId === 52638 ? mainnet :     // contract.dev stagenet = Ethereum mainnet fork
+  activeChainId === 1    ? mainnet :
+  base;
 const monitorRpcUrl = process.env["MONITOR_RPC_URL"] ?? process.env["BASE_RPC_URL"];
 const publicClient = createPublicClient({
   chain: activeChain,
