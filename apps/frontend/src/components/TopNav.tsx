@@ -6,7 +6,7 @@ import { IconLogo, IconChev, IconSafe } from '@/lib/icons';
 import { type ActiveOrg } from '@/lib/useActiveOrg';
 import { type Org } from '@/lib/data';
 
-type View = 'intent' | 'generating' | 'strategies' | 'detail' | 'dashboard' | 'marketplace' | 'reports' | 'mandates';
+type View = 'home' | 'mandates' | 'intent' | 'generating' | 'strategies' | 'detail' | 'dashboard' | 'marketplace' | 'reports';
 
 interface TopNavProps {
   view: View;
@@ -32,12 +32,11 @@ export function TopNav({ view, onNav, activeOrg, onOrgChange, onOpenTweaks, onRe
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const navItems: { label: string; key: View }[] = [
-    { label: 'Compose', key: 'intent' },
+  const navItems: { label: string; key: View; accent?: boolean }[] = [
+    { label: 'Mandates', key: 'mandates', accent: true },
     { label: 'Dashboard', key: 'dashboard' },
-    { label: 'Mandates', key: 'mandates' },
+    { label: 'Manual', key: 'intent' },
     { label: 'Reports', key: 'reports' },
-    { label: 'Marketplace', key: 'marketplace' },
   ];
 
   return (
@@ -112,15 +111,23 @@ export function TopNav({ view, onNav, activeOrg, onOrgChange, onOpenTweaks, onRe
 
       {/* Nav Links */}
       <div className="navlinks">
-        {navItems.map(item => (
-          <button
-            key={item.key}
-            className={view === item.key || (view === 'generating' && item.key === 'intent') || (view === 'strategies' && item.key === 'intent') || (view === 'detail' && item.key === 'intent') ? 'active' : ''}
-            onClick={() => onNav(item.key)}
-          >
-            {item.label}
-          </button>
-        ))}
+        {navItems.map(item => {
+          const isActive =
+            view === item.key ||
+            (item.key === 'intent' && (view === 'generating' || view === 'strategies' || view === 'detail')) ||
+            (item.key === 'mandates' && view === 'home');
+          return (
+            <button
+              key={item.key}
+              className={isActive ? 'active' : ''}
+              onClick={() => onNav(item.key)}
+              style={item.accent && isActive ? { color: 'var(--accent)' } : undefined}
+            >
+              {item.label}
+              {item.accent && <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--accent)', display: 'inline-block', marginLeft: 4, verticalAlign: 'middle', opacity: 0.8 }} />}
+            </button>
+          );
+        })}
       </div>
 
       <div className="spacer" />

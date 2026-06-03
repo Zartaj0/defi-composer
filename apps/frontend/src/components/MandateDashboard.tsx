@@ -18,16 +18,20 @@ interface MandateSummary {
 }
 
 function StatusBadge({ status }: { status: MandateStatus }) {
-  const styles: Record<MandateStatus, string> = {
-    draft: "bg-yellow-500/10 text-yellow-400 border-yellow-500/30",
-    active: "bg-green-500/10 text-green-400 border-green-500/30",
-    paused: "bg-orange-500/10 text-orange-400 border-orange-500/30",
-    archived: "bg-[#1a1a1a] text-[#888] border-[#333]",
+  const map: Record<MandateStatus, { bg: string; color: string; border: string }> = {
+    active:   { bg: "rgba(0,200,100,0.1)", color: "#4ade80", border: "rgba(0,200,100,0.25)" },
+    draft:    { bg: "rgba(255,180,0,0.1)", color: "#f5a623", border: "rgba(255,180,0,0.25)" },
+    paused:   { bg: "rgba(255,120,0,0.1)", color: "#fb923c", border: "rgba(255,120,0,0.25)" },
+    archived: { bg: "var(--bg-elev)",      color: "var(--text-faint)", border: "var(--border)" },
   };
+  const s = map[status] ?? map.archived;
   return (
-    <span
-      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${styles[status]}`}
-    >
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 5,
+      padding: "2px 8px", borderRadius: 100, fontSize: 11, fontWeight: 500,
+      background: s.bg, color: s.color, border: `1px solid ${s.border}`,
+    }}>
+      {status === "active" && <span style={{ width: 6, height: 6, borderRadius: "50%", background: s.color, display: "inline-block" }} />}
       {status.charAt(0).toUpperCase() + status.slice(1)}
     </span>
   );
@@ -35,234 +39,131 @@ function StatusBadge({ status }: { status: MandateStatus }) {
 
 interface MandateDashboardProps {
   orgId?: string;
+  onSetupMandate?: () => void;
+  activeMandateId?: string | null;
 }
 
-export function MandateDashboard({ orgId }: MandateDashboardProps) {
+export function MandateDashboard({ orgId, onSetupMandate, activeMandateId }: MandateDashboardProps) {
   const router = useRouter();
   const [mandates, setMandates] = useState<MandateSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!orgId) {
-      setLoading(false);
-      return;
-    }
-
+    if (!orgId) { setLoading(false); return; }
     let cancelled = false;
     setLoading(true);
     setError(null);
 
     fetch(`${API_BASE}/api/v1/mandates/org/${orgId}`)
-      .then(async (res) => {
+      .then(async res => {
         if (!res.ok) throw new Error(`Failed to load mandates (${res.status})`);
         const json = await res.json();
-        if (!cancelled) {
-          setMandates((json?.data ?? []) as MandateSummary[]);
-        }
+        if (!cancelled) setMandates((json?.data ?? []) as MandateSummary[]);
       })
-      .catch((e: unknown) => {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Unknown error");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : "Unknown error"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [orgId]);
 
-  return (
-    <div className="page fade-in">
-      <div className="flex items-start justify-between mb-8">
-        <div>
-          <div
-            style={{
-              fontSize: 11,
-              fontWeight: 600,
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-              color: "var(--text-faint)",
-              marginBottom: 6,
-            }}
-          >
-            Mandates
-          </div>
-          <h2
-            style={{
-              fontSize: "clamp(20px, 2.2vw, 28px)",
-              fontWeight: 700,
-              color: "var(--text)",
-              margin: 0,
-            }}
-          >
-            Treasury Mandates
-          </h2>
-          <div
-            style={{
-              marginTop: 6,
-              fontSize: 13,
-              color: "var(--text-dim)",
-            }}
-          >
-            Risk policies and spending rules for autonomous execution.
-          </div>
-        </div>
-        <button
-          className="btn btn-primary"
-          onClick={() => router.push("/onboarding")}
-          style={{ flexShrink: 0 }}
-        >
-          + Create Mandate
-        </button>
+  if (!orgId) return null;
+
+  if (loading) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {[0, 1].map(i => (
+          <div key={i} style={{ height: 72, borderRadius: "var(--radius-md)", background: "var(--bg-elev)", border: "1px solid var(--border)", animation: "pulse 2s infinite" }} />
+        ))}
       </div>
+    );
+  }
 
-      {!orgId && (
-        <div
-          className="card card-pad"
-          style={{
-            textAlign: "center",
-            padding: "48px 24px",
-            color: "var(--text-dim)",
-          }}
-        >
-          <div style={{ fontSize: 14, marginBottom: 12 }}>
-            No organization selected.
-          </div>
-          <button
-            className="btn btn-primary"
-            onClick={() => router.push("/onboarding")}
-          >
-            Set up your organization
+  if (error) {
+    return (
+      <div style={{ padding: "12px 14px", border: "1px solid rgba(255,90,90,0.22)", borderRadius: "var(--radius-md)", color: "var(--neg)", background: "rgba(255,90,90,0.08)", fontSize: 13 }}>
+        {error}
+      </div>
+    );
+  }
+
+  if (mandates.length === 0) {
+    return (
+      <div style={{ padding: "48px 24px", background: "var(--bg-elev)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", textAlign: "center" }}>
+        <div style={{ fontSize: 40, marginBottom: 12 }}>🤖</div>
+        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No mandates yet</div>
+        <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 20, maxWidth: 400, margin: "0 auto 20px" }}>
+          Create a mandate to let the agent autonomously manage your treasury.
+          Set your risk bounds once — the agent handles the rest 24/7.
+        </div>
+        {onSetupMandate && (
+          <button className="btn btn-primary" onClick={onSetupMandate}>
+            + Create First Mandate
           </button>
-        </div>
-      )}
+        )}
+      </div>
+    );
+  }
 
-      {orgId && loading && (
-        <div
-          style={{ color: "var(--text-faint)", fontSize: 13, textAlign: "center", padding: "48px 0" }}
-        >
-          Loading mandates…
-        </div>
-      )}
-
-      {orgId && error && (
-        <div
-          style={{
-            padding: "12px 14px",
-            border: "1px solid rgba(255,90,90,0.22)",
-            borderRadius: "var(--radius-md)",
-            color: "var(--neg)",
-            background: "rgba(255,90,90,0.08)",
-            fontSize: 13,
-          }}
-        >
-          {error}
-        </div>
-      )}
-
-      {orgId && !loading && !error && mandates.length === 0 && (
-        <div
-          className="card card-pad"
-          style={{
-            textAlign: "center",
-            padding: "48px 24px",
-            color: "var(--text-dim)",
-          }}
-        >
-          <div style={{ fontSize: 14, marginBottom: 12 }}>
-            No mandates yet for this organization.
-          </div>
-          <button
-            className="btn btn-primary"
-            onClick={() => router.push("/onboarding")}
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {mandates.map(m => {
+        const isActive = m.status === "active";
+        const isHighlighted = m.id === activeMandateId;
+        return (
+          <div
+            key={m.id}
+            onClick={() => router.push(`/mandate/${m.id}`)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") router.push(`/mandate/${m.id}`); }}
+            style={{
+              display: "flex", alignItems: "center", gap: 16,
+              padding: "16px 20px",
+              background: isHighlighted ? "var(--accent-soft)" : "var(--bg-elev)",
+              border: `1px solid ${isHighlighted ? "var(--accent-line)" : "var(--border)"}`,
+              borderRadius: "var(--radius-md)",
+              cursor: "pointer",
+              transition: "background 0.15s, border-color 0.15s",
+            }}
           >
-            Create your first mandate
-          </button>
-        </div>
-      )}
+            {/* Agent status indicator */}
+            <div style={{
+              width: 10, height: 10, borderRadius: "50%", flexShrink: 0,
+              background: isActive ? "#4ade80" : "var(--text-faint)",
+              boxShadow: isActive ? "0 0 6px rgba(74,222,128,0.5)" : "none",
+            }} />
 
-      {orgId && !loading && mandates.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {mandates.map((m) => (
-            <div
-              key={m.id}
-              className="card card-pad"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 16,
-                cursor: "pointer",
-              }}
-              onClick={() => router.push(`/mandate/${m.id}`)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  router.push(`/mandate/${m.id}`);
-                }
-              }}
-            >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    marginBottom: 4,
-                  }}
-                >
-                  <span style={{ fontWeight: 500, fontSize: 14 }}>{m.name}</span>
-                  <StatusBadge status={m.status} />
-                </div>
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 16,
-                    fontSize: 12,
-                    color: "var(--text-faint)",
-                    fontFamily: "var(--font-mono)",
-                  }}
-                >
-                  <span>Reserve: ${(m.reserveFloorUsd ?? 0).toLocaleString()}</span>
-                  <span>Risk: {m.riskBudgetPct}%</span>
-                  <span>
-                    Protocols: {(m.approvedProtocols ?? []).slice(0, 3).join(", ")}
-                    {(m.approvedProtocols ?? []).length > 3
-                      ? ` +${(m.approvedProtocols ?? []).length - 3}`
-                      : ""}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
+                <span style={{ fontWeight: 500, fontSize: 14 }}>{m.name}</span>
+                <StatusBadge status={m.status} />
+                {isActive && (
+                  <span style={{ fontSize: 10, color: "var(--accent)", fontFamily: "var(--font-mono)", letterSpacing: "0.06em" }}>
+                    AGENT RUNNING
                   </span>
-                </div>
+                )}
               </div>
-              <div style={{ fontSize: 12, color: "var(--text-faint)", flexShrink: 0 }}>
-                {new Date(m.createdAt).toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                  year: "numeric",
-                })}
+              <div style={{ display: "flex", gap: 16, fontSize: 12, color: "var(--text-faint)", fontFamily: "var(--font-mono)", flexWrap: "wrap" }}>
+                <span>Reserve: ${(m.reserveFloorUsd ?? 0).toLocaleString()}</span>
+                <span>Risk: {m.riskBudgetPct}%</span>
+                <span>
+                  {(m.approvedProtocols ?? []).map(p =>
+                    p.replace("aave-v3", "Aave V3").replace("morpho-blue", "Morpho").replace("uniswap-v3", "Uniswap")
+                  ).join(", ")}
+                </span>
               </div>
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 14 14"
-                fill="none"
-                style={{ color: "var(--text-faint)", flexShrink: 0 }}
-              >
-                <path
-                  d="M5 3l4 4-4 4"
-                  stroke="currentColor"
-                  strokeWidth="1.2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
             </div>
-          ))}
-        </div>
-      )}
+
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+              <span style={{ fontSize: 11, color: "var(--text-faint)" }}>
+                {new Date(m.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+              </span>
+              <span style={{ fontSize: 12, color: "var(--accent)", fontWeight: 500 }}>View →</span>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

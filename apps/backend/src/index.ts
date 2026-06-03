@@ -12,6 +12,7 @@ import { mandateRoutes } from "./routes/mandates.js";
 import { simulationRoutes } from "./routes/simulations.js";
 import { agentRoutes } from "./routes/agent.js";
 import { checkDbConnection } from "@defi-composer/db";
+import { startAgentLoop, stopAgentLoop, getAgentStatus } from "./agent/agent-loop.js";
 
 const isDev = process.env["NODE_ENV"] !== "production";
 const app = Fastify({
@@ -41,13 +42,16 @@ await app.register(websocket);
 // ─── Health Check ────────────────────────────────────────────
 app.get("/health", async () => {
   const dbOk = await checkDbConnection();
+  const agentStatus = getAgentStatus();
   return {
     status: dbOk ? "ok" : "degraded",
     version: "0.1.0",
     timestamp: new Date().toISOString(),
     services: {
       db: dbOk ? "connected" : "unreachable",
+      agent: agentStatus.running ? "running" : "stopped",
     },
+    agent: agentStatus,
   };
 });
 
@@ -69,6 +73,24 @@ try {
   await app.listen({ port, host: "0.0.0.0" });
   console.log(`\n🚀 DeFi Composer API running on http://localhost:${port}`);
   console.log(`   Health: http://localhost:${port}/health`);
+
+  // Start autonomous agent loop (no Redis required)
+  const agentEnabled = process.env["AGENT_LOOP_DISABLED"] !== "true";
+  if (agentEnabled) {
+    startAgentLoop();
+  } else {
+    console.log("[Agent] Loop disabled via AGENT_LOOP_DISABLED=true");
+  }
+
+  // Graceful shutdown
+  const shutdown = async () => {
+    console.log("\nShutting down...");
+    stopAgentLoop();
+    await app.close();
+    process.exit(0);
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 } catch (err) {
   app.log.error(err);
   process.exit(1);
