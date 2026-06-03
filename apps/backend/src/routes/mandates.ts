@@ -20,11 +20,18 @@ import type { ApiResponse } from "@defi-composer/shared";
 
 // ── EIP-712 constants ────────────────────────────────────────────────────────
 
-const EIP712_DOMAIN = {
-  name: "DeFiComposer",
-  version: "1",
-  chainId: 8453,
-} as const;
+// chainId is NOT hardcoded — the frontend sends the connected wallet's chainId
+// in the activate request body, and we use that for verification. This lets the
+// same backend work with mainnet (8453), stagenet (52638), and testnets.
+const DEFAULT_CHAIN_ID = parseInt(process.env["CHAIN_ID"] ?? "8453", 10);
+
+function buildEip712Domain(chainId: number) {
+  return {
+    name: "DeFiComposer",
+    version: "1",
+    chainId,
+  } as const;
+}
 
 const EIP712_TYPES = {
   MandateActivation: [
@@ -332,7 +339,7 @@ export const mandateRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(200).send({
         success: true,
         data: {
-          domain: EIP712_DOMAIN,
+          domain: buildEip712Domain(DEFAULT_CHAIN_ID),
           types: EIP712_TYPES,
           primaryType: "MandateActivation",
           message: jsonSafeMessage,
@@ -358,6 +365,7 @@ export const mandateRoutes: FastifyPluginAsync = async (app) => {
   interface ActivateMandateBody {
     signature: `0x${string}`;
     signerAddress: `0x${string}`;
+    chainId?: number; // connected wallet's chain ID — must match what was signed
   }
 
   app.post<{ Params: { id: string }; Body: ActivateMandateBody }>(
@@ -366,7 +374,9 @@ export const mandateRoutes: FastifyPluginAsync = async (app) => {
       const requestId = uuidv4();
       try {
         const { id } = request.params;
-        const { signature, signerAddress } = request.body;
+        const { signature, signerAddress, chainId: clientChainId } = request.body;
+        // Use the chainId the client signed with; fall back to CHAIN_ID env / 8453
+        const signingChainId = clientChainId ?? DEFAULT_CHAIN_ID;
 
         // ── Basic input validation ────────────────────────────────────────
         if (!signature || !/^0x[0-9a-fA-F]+$/.test(signature)) {
@@ -444,7 +454,7 @@ export const mandateRoutes: FastifyPluginAsync = async (app) => {
         try {
           isValid = await verifyTypedData({
             address: signerAddress,
-            domain: EIP712_DOMAIN,
+            domain: buildEip712Domain(signingChainId),
             types: EIP712_TYPES,
             primaryType: "MandateActivation",
             message,

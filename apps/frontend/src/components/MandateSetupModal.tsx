@@ -1,16 +1,10 @@
 'use client';
 
 import React, { useState, useCallback } from 'react';
-import { useAccount, useSignTypedData } from 'wagmi';
+import { useAccount, useSignTypedData, useChainId } from 'wagmi';
 import { IconX, IconCheck, IconShield, IconArrowRight, IconBolt } from '@/lib/icons';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
-
-const EIP712_DOMAIN = {
-  name: 'DeFiComposer',
-  version: '1',
-  chainId: 8453,
-} as const;
 
 const EIP712_TYPES = {
   MandateActivation: [
@@ -87,6 +81,7 @@ function Slider({ label, value, min, max, step, format, onChange }: {
 export function MandateSetupModal({ orgId, orgName, onCreated, onClose }: Props) {
   const { address } = useAccount();
   const { signTypedDataAsync } = useSignTypedData();
+  const connectedChainId = useChainId(); // always matches the active wallet chain
 
   const [step, setStep] = useState<SetupStep>('params');
   const [params, setParams] = useState<MandateParams>(DEFAULT_PARAMS);
@@ -141,7 +136,7 @@ export function MandateSetupModal({ orgId, orgName, onCreated, onClose }: Props)
       // 2. Sign EIP-712 activation payload
       setStatusMsg('Sign to activate mandate…');
       const sig = await signTypedDataAsync({
-        domain: EIP712_DOMAIN,
+        domain: { name: 'DeFiComposer', version: '1', chainId: connectedChainId },
         types: EIP712_TYPES,
         primaryType: 'MandateActivation',
         message: {
@@ -160,7 +155,7 @@ export function MandateSetupModal({ orgId, orgName, onCreated, onClose }: Props)
       const activateRes = await fetch(`${API_BASE}/api/v1/mandates/${mandateId}/activate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ signature: sig, signerAddress: address }),
+        body: JSON.stringify({ signature: sig, signerAddress: address, chainId: connectedChainId }),
       });
       const activateData = await activateRes.json().catch(() => null);
       if (!activateRes.ok || !activateData?.success) {
@@ -179,7 +174,7 @@ export function MandateSetupModal({ orgId, orgName, onCreated, onClose }: Props)
       }
       setStep('review');
     }
-  }, [address, orgId, params, signTypedDataAsync, onCreated]);
+  }, [address, connectedChainId, orgId, params, signTypedDataAsync, onCreated]);
 
   return (
     <div className="modal-back" onClick={e => { if (e.target === e.currentTarget && step !== 'signing') onClose(); }}>
