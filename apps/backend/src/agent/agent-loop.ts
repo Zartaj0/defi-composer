@@ -556,8 +556,10 @@ async function scanAllOrgs(): Promise<void> {
 
   await Promise.allSettled(
     active.map(org => {
-      const baseWallets = org.wallets.filter(w => w.chainId === activeChainId);
-      const walletAddress = baseWallets[0]?.address ?? "";
+      // Prefer wallet registered on active chain; fall back to any wallet.
+      // EVM addresses are chain-agnostic — the same address works on all chains.
+      const chainWallets = org.wallets.filter(w => w.chainId === activeChainId);
+      const walletAddress = chainWallets[0]?.address ?? org.wallets[0]?.address ?? "";
       if (!walletAddress) return Promise.resolve();
       return scanOrg(org.id, org.safeAddress ?? null, walletAddress);
     })

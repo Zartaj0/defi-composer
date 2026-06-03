@@ -583,6 +583,10 @@ export const simulationRoutes: FastifyPluginAsync = async (app) => {
 
         const org = await getOrg(mandate.orgId).catch(() => null);
         const safeAddress = org?.safeAddress ?? null;
+        // Fall back to the first registered wallet address when there's no Safe
+        const walletAddress = (org as { wallets?: Array<{ address: string }> } | null)
+          ?.wallets?.[0]?.address ?? null;
+        const treasuryAddress = safeAddress ?? walletAddress;
 
         // ── Fetch activity rows (DB join) ─────────────────────────
         const activity = await listMandateActivity(mandateId, 30);
@@ -606,7 +610,7 @@ export const simulationRoutes: FastifyPluginAsync = async (app) => {
           policy: null,
         };
 
-        if (safeAddress) {
+        if (treasuryAddress) {
           try {
             const chainId = parseInt(process.env["CHAIN_ID"] ?? "84532", 10);
             const rpcUrl  = chainId === 84532
@@ -663,16 +667,26 @@ export const simulationRoutes: FastifyPluginAsync = async (app) => {
                 usdc:  "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
                 ausdc: "0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB",
               },
+              // contract.dev stagenet (52638) + Ethereum mainnet (1) — same addresses
+              52638: {
+                usdc:  "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                ausdc: "0x98C23E9d8f34FEFb1B7BD6a91B7AF122a1f5cE47",
+              },
+              1: {
+                usdc:  "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                ausdc: "0x98C23E9d8f34FEFb1B7BD6a91B7AF122a1f5cE47",
+              },
             };
-            const addrs = TOKEN_ADDRESSES[chainId] ?? TOKEN_ADDRESSES[84532]!;
+            // Fall back to mainnet addresses if chain not recognized (not Base Sepolia)
+            const addrs = TOKEN_ADDRESSES[chainId] ?? (chainId !== 84532 ? TOKEN_ADDRESSES[1]! : TOKEN_ADDRESSES[84532]!);
             const USDC_ADDR  = addrs.usdc;
             const AUSDC_ADDR = addrs.ausdc;
 
             void rpcUrl; // used for context; client uses createFallbackTransport()
 
             const [usdcRaw, ausdcRaw, enabled, policyRaw] = await Promise.allSettled([
-              client.readContract({ address: USDC_ADDR,  abi: ERC20_ABI, functionName: "balanceOf", args: [safeAddress as `0x${string}`] }),
-              client.readContract({ address: AUSDC_ADDR, abi: ERC20_ABI, functionName: "balanceOf", args: [safeAddress as `0x${string}`] }),
+              client.readContract({ address: USDC_ADDR,  abi: ERC20_ABI, functionName: "balanceOf", args: [treasuryAddress as `0x${string}`] }),
+              client.readContract({ address: AUSDC_ADDR, abi: ERC20_ABI, functionName: "balanceOf", args: [treasuryAddress as `0x${string}`] }),
               moduleAddr ? client.readContract({ address: safeAddress as `0x${string}`, abi: MODULE_ABI, functionName: "isModuleEnabled", args: [moduleAddr as `0x${string}`] }) : Promise.resolve(false),
               moduleAddr ? client.readContract({ address: moduleAddr as `0x${string}`, abi: MODULE_ABI, functionName: "policy" }) : Promise.resolve(null),
             ]);
