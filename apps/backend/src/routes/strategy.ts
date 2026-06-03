@@ -1,8 +1,9 @@
 // ============================================================
 // Strategy Routes
-// POST /api/v1/strategy/generate  — synchronous: AI → risk → simulate → rank
-// GET  /api/v1/strategy/:id       — fetch a stored candidate strategy
-// POST /api/v1/strategy/:id/deploy — queue execution job, create pending position
+// POST /api/v1/strategy/generate       — synchronous: AI → risk → simulate → rank
+// GET  /api/v1/strategy/:id            — fetch a stored candidate strategy
+// POST /api/v1/strategy/:id/deploy     — create pending position record
+// POST /api/v1/strategy/:id/prepare-execution — build calldata for browser wallet
 // ============================================================
 
 import type { FastifyPluginAsync } from "fastify";
@@ -10,11 +11,13 @@ import { v4 as uuidv4 } from "uuid";
 import { StrategyPlanner } from "@defi-composer/strategy-engine";
 import { RiskEngine } from "@defi-composer/risk-engine";
 import { SimulationEngine } from "@defi-composer/simulation-engine";
+import { executionEngine } from "@defi-composer/execution-engine";
 import {
   getCandidate,
   getOrg,
   createPosition,
   updateIntentStatus,
+  updatePositionStatus,
 } from "@defi-composer/db";
 import type {
   UserIntent,
@@ -222,6 +225,129 @@ export const strategyRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(500).send({
         success: false,
         error: err instanceof Error ? err.message : "Deploy failed",
+        requestId,
+        timestamp: new Date(),
+      });
+    }
+  });
+
+  // ── POST /:id/prepare-execution ────────────────────────────────────────────
+  // Build the actual transaction calldata for browser-wallet execution.
+  // No private keys involved — the frontend sends each tx via MetaMask/wagmi.
+  // BigInt values are returned as hex strings for safe JSON serialization.
+  app.post<{
+    Params: { id: string };
+    Body: {
+      walletAddress: string;
+      capitalUsd: number;
+      positionId?: string;
+    };
+  }>("/:id/prepare-execution", async (request, reply) => {
+    const { walletAddress, capitalUsd, positionId } = request.body;
+    const requestId = uuidv4();
+
+    try {
+      const row = await getCandidate(request.params.id);
+      if (!row) {
+        return reply.status(404).send({
+          success: false,
+          error: "Strategy not found",
+          requestId,
+          timestamp: new Date(),
+        });
+      }
+
+      const strategy = row.candidate;
+
+      if (strategy.riskScore.blockers.length > 0) {
+        return reply.status(400).send({
+          success: false,
+          error: `Cannot execute: ${strategy.riskScore.blockers.join("; ")}`,
+          requestId,
+          timestamp: new Date(),
+        });
+      }
+
+      // Convert USD capital to USDC token units (6 decimals)
+      const capitalAmount = BigInt(Math.floor(capitalUsd * 1_000_000));
+      const userAddress = walletAddress as `0x${string}`;
+
+      const plan = await executionEngine.buildExecutionPlan(
+        strategy.graph,
+        capitalAmount,
+        userAddress,
+        userAddress, // for EOA, smart account = user address
+      );
+
+      // Serialize BigInt → hex strings for safe JSON transport
+      const steps = plan.steps.map(step => ({
+        index:       step.index,
+        nodeId:      step.nodeId,
+        description: step.description,
+        txType:      step.txType,
+        to:          step.action.to,
+        data:        step.action.data,
+        value:       `0x${step.action.value.toString(16)}`,
+        gasEstimate: `0x${step.action.gasEstimate.toString(16)}`,
+      }));
+
+      app.log.info(
+        { strategyId: strategy.id, steps: steps.length, positionId },
+        "Execution plan built"
+      );
+
+      return reply.status(200).send({
+        success: true,
+        data: {
+          strategyId: strategy.id,
+          positionId,
+          steps,
+          totalGasEstimate: `0x${plan.totalGasEstimate.toString(16)}`,
+          estimatedCostUsd: plan.estimatedCostUsd,
+        },
+        requestId,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      app.log.error({ err, requestId }, "prepare-execution failed");
+      return reply.status(500).send({
+        success: false,
+        error: err instanceof Error ? err.message : "Failed to build execution plan",
+        requestId,
+        timestamp: new Date(),
+      });
+    }
+  });
+
+  // ── POST /:id/confirm-execution ────────────────────────────────────────────
+  // Called by frontend after all transactions are submitted on-chain.
+  // Updates the position status to "active" and records tx hashes.
+  app.post<{
+    Params: { id: string };
+    Body: {
+      positionId: string;
+      txHashes: string[];
+    };
+  }>("/:id/confirm-execution", async (request, reply) => {
+    const { positionId, txHashes } = request.body;
+    const requestId = uuidv4();
+
+    try {
+      await updatePositionStatus(positionId, "active");
+
+      app.log.info({ positionId, txHashes }, "Position confirmed active");
+
+      return reply.status(200).send({
+        success: true,
+        data: { positionId, status: "active", txHashes },
+        requestId,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      app.log.error({ err, requestId }, "confirm-execution failed");
+      return reply.status(500).send({
+        success: false,
+        error: err instanceof Error ? err.message : "Failed to confirm execution",
         requestId,
         timestamp: new Date(),
       });

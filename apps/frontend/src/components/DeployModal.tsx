@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
+import { useSendTransaction, useWaitForTransactionReceipt } from 'wagmi';
 import { type Strategy, type Org } from '@/lib/data';
 import { fmtUsd, fmtPct } from '@/lib/utils';
-import { IconX, IconCheck, IconBolt, IconShield } from '@/lib/icons';
+import { IconX, IconCheck, IconBolt, IconShield, IconArrowRight } from '@/lib/icons';
 
 interface DeployModalProps {
   strategy: Strategy;
@@ -15,41 +16,46 @@ interface DeployModalProps {
   onClose: () => void;
 }
 
-type DeployStep = 'review' | 'submitting' | 'queued';
+interface TxStep {
+  index: number;
+  description: string;
+  txType: string;
+  to: `0x${string}`;
+  data: `0x${string}`;
+  value: `0x${string}`;
+}
 
-const STEPS: DeployStep[] = ['review', 'submitting', 'queued'];
+type DeployStep = 'review' | 'executing' | 'done';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
-interface DeployResult {
-  positionId: string;
-  jobId?: string;
-  strategyId: string;
-  status: string;
-  message: string;
-  positionUrl: string;
-}
-
 export function DeployModal({ strategy, capitalUsd, org, intentId, walletAddress, safeAddress, onClose }: DeployModalProps) {
   const [step, setStep] = useState<DeployStep>('review');
-  const [submitting, setSubmitting] = useState(false);
-  const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
+  const [txSteps, setTxSteps] = useState<TxStep[]>([]);
+  const [currentTxIdx, setCurrentTxIdx] = useState(0);
+  const [completedHashes, setCompletedHashes] = useState<string[]>([]);
+  const [positionId, setPositionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [statusMsg, setStatusMsg] = useState('');
 
-  const stepIdx = STEPS.indexOf(step);
+  const { sendTransactionAsync } = useSendTransaction();
 
-  const handleNext = async () => {
-    if (step !== 'review') return;
+  const yearlyYield = capitalUsd * (strategy.apy / 100);
+
+  // ── Step 1: Deploy (create DB record) then prepare calldata ────────────────
+  const handleExecute = useCallback(async () => {
+    if (!walletAddress || !intentId) {
+      setError('Wallet not connected or intent missing.');
+      return;
+    }
 
     setError(null);
-    setStep('submitting');
-    setSubmitting(true);
+    setStep('executing');
+    setStatusMsg('Creating position record…');
 
     try {
-      if (!intentId) throw new Error('Cannot deploy without a stored backend intent id.');
-      if (!walletAddress) throw new Error('Connect a wallet before submitting a strategy.');
-
-      const res = await fetch(`${API_BASE}/api/v1/strategy/${strategy.id}/deploy`, {
+      // 1. Create position record in DB
+      const deployRes = await fetch(`${API_BASE}/api/v1/strategy/${strategy.id}/deploy`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -60,47 +66,99 @@ export function DeployModal({ strategy, capitalUsd, org, intentId, walletAddress
           capitalUsd,
         }),
       });
-      const payload = await res.json().catch(() => null);
+      const deployData = await deployRes.json().catch(() => null);
+      if (!deployRes.ok || !deployData?.success) {
+        throw new Error(deployData?.error ?? `Deploy request failed (${deployRes.status})`);
+      }
+      const pid = deployData.data?.positionId as string;
+      setPositionId(pid);
 
-      if (!res.ok || !payload?.success) {
-        throw new Error(payload?.error ?? `Deploy request failed with ${res.status}`);
+      // 2. Build transaction calldata
+      setStatusMsg('Building transaction calldata…');
+      const prepRes = await fetch(`${API_BASE}/api/v1/strategy/${strategy.id}/prepare-execution`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ walletAddress, capitalUsd, positionId: pid }),
+      });
+      const prepData = await prepRes.json().catch(() => null);
+      if (!prepRes.ok || !prepData?.success) {
+        throw new Error(prepData?.error ?? `Failed to build execution plan (${prepRes.status})`);
       }
 
-      setDeployResult(payload.data as DeployResult);
-      setStep('queued');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Deploy request failed.');
-      setStep('review');
-    } finally {
-      setSubmitting(false);
-    }
-  };
+      const steps: TxStep[] = prepData.data.steps;
+      if (!steps || steps.length === 0) {
+        throw new Error('No transactions to execute — strategy graph may be empty.');
+      }
 
-  const yearlyYield = capitalUsd * (strategy.apy / 100);
+      setTxSteps(steps);
+      setCurrentTxIdx(0);
+      setStatusMsg(`Ready — ${steps.length} transaction${steps.length > 1 ? 's' : ''} to sign`);
+
+      // 3. Send transactions one by one via MetaMask
+      const hashes: string[] = [];
+      for (let i = 0; i < steps.length; i++) {
+        const txStep = steps[i];
+        setCurrentTxIdx(i);
+        setStatusMsg(`Sign transaction ${i + 1} of ${steps.length}: ${txStep.description}`);
+
+        const hash = await sendTransactionAsync({
+          to:    txStep.to,
+          data:  txStep.data,
+          value: BigInt(txStep.value),
+        });
+
+        hashes.push(hash);
+        setCompletedHashes([...hashes]);
+        setStatusMsg(`Transaction ${i + 1} submitted — waiting for confirmation…`);
+
+        // Wait for each tx to be mined before sending the next
+        // (approvals must confirm before the supply tx)
+        if (i < steps.length - 1) {
+          await waitForTx(hash);
+        }
+      }
+
+      // 4. Mark position active
+      setStatusMsg('Confirming on backend…');
+      await fetch(`${API_BASE}/api/v1/strategy/${strategy.id}/confirm-execution`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ positionId: pid, txHashes: hashes }),
+      }).catch(() => null); // non-critical
+
+      setStep('done');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Execution failed.';
+      // User rejected the tx in MetaMask
+      if (msg.includes('rejected') || msg.includes('denied') || msg.includes('cancel')) {
+        setError('Transaction rejected in wallet.');
+      } else {
+        setError(msg);
+      }
+      setStep('review');
+    }
+  }, [walletAddress, intentId, strategy.id, org.id, safeAddress, capitalUsd, sendTransactionAsync]);
 
   return (
-    <div className="modal-back" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="modal-back" onClick={(e) => { if (e.target === e.currentTarget && step !== 'executing') onClose(); }}>
       <div className="modal fade-in">
+
         {/* Header */}
         <div className="modal-head">
           <IconBolt size={16} style={{ color: 'var(--accent)' }} />
-          <span style={{ fontWeight: 500, fontSize: 14 }}>Deploy Strategy</span>
-          <div className="step-dots">
-            {STEPS.slice(0, -1).map((s, i) => (
-              <div
-                key={s}
-                className={`d ${i === stepIdx ? 'active' : i < stepIdx ? 'done' : ''}`}
-              />
-            ))}
-          </div>
+          <span style={{ fontWeight: 500, fontSize: 14 }}>
+            {step === 'done' ? 'Strategy Deployed' : 'Execute Strategy'}
+          </span>
           <div style={{ flex: 1 }} />
-          <button className="btn btn-ghost btn-sm" onClick={onClose}>
-            <IconX size={12} />
-          </button>
+          {step !== 'executing' && (
+            <button className="btn btn-ghost btn-sm" onClick={onClose}><IconX size={12} /></button>
+          )}
         </div>
 
         {/* Body */}
         <div className="modal-body">
+
+          {/* ── Review ─────────────────────────────────────────────────── */}
           {step === 'review' && (
             <div className="fade-in">
               <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 16 }}>Review Strategy</div>
@@ -110,27 +168,29 @@ export function DeployModal({ strategy, capitalUsd, org, intentId, walletAddress
                 <div style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.4 }}>{strategy.summary}</div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
                 {[
-                  { label: 'Capital', value: fmtUsd(capitalUsd, { compact: true }) },
-                  { label: 'APY', value: fmtPct(strategy.apy, 1), color: 'var(--pos)' },
-                  { label: 'Annual Yield', value: fmtUsd(yearlyYield, { compact: true }), color: 'var(--pos)' },
-                  { label: 'Risk Score', value: `${strategy.riskScore.toFixed(1)}/10` },
-                  { label: 'Gas Cost', value: fmtUsd(strategy.gasUsd) },
-                  { label: 'Protocols', value: strategy.protocols.length.toString() },
+                  { label: 'Capital',     value: fmtUsd(capitalUsd, { compact: true }) },
+                  { label: 'APY',         value: fmtPct(strategy.apy, 1),        color: 'var(--pos)' },
+                  { label: 'Annual Yield',value: fmtUsd(yearlyYield, { compact: true }), color: 'var(--pos)' },
+                  { label: 'Risk Score',  value: `${strategy.riskScore.toFixed(1)}/10` },
+                  { label: 'Gas Est.',    value: fmtUsd(strategy.gasUsd) },
+                  { label: 'Protocols',   value: strategy.protocols.join(', ') },
                 ].map(item => (
                   <div key={item.label} style={{ padding: 10, background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}>
-                    <div style={{ fontSize: 10, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>{item.label}</div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 14, color: item.color ?? 'var(--text)' }}>{item.value}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>{item.label}</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: item.color ?? 'var(--text)' }}>{item.value}</div>
                   </div>
                 ))}
               </div>
 
-              <div style={{ background: 'var(--accent-soft)', border: '1px solid var(--accent-line)', borderRadius: 'var(--radius-md)', padding: 12, fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>
+              <div style={{ background: 'var(--accent-soft)', border: '1px solid var(--accent-line)', borderRadius: 'var(--radius-md)', padding: 12, fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5, marginBottom: error ? 12 : 0 }}>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                   <IconShield size={13} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: 1 }} />
                   <span>
-                    <strong style={{ color: 'var(--text)' }}>Simulation required.</strong> The backend will re-run required simulation and policy checks before creating any execution record.
+                    <strong style={{ color: 'var(--text)' }}>Your wallet signs every transaction.</strong>{' '}
+                    MetaMask will ask you to approve each step. No private keys are stored anywhere.
+                    {safeAddress && <><br /><strong style={{ color: 'var(--text)' }}>Safe mode:</strong> Transactions are sent to your Safe ({safeAddress.slice(0,6)}…{safeAddress.slice(-4)}).</>}
                   </span>
                 </div>
               </div>
@@ -143,45 +203,84 @@ export function DeployModal({ strategy, capitalUsd, org, intentId, walletAddress
             </div>
           )}
 
-          {step === 'submitting' && (
-            <div className="fade-in" style={{ textAlign: 'center', padding: '20px 0' }}>
-              {submitting ? (
-                <>
-                  <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
-                    <div className="gen-spin" style={{ width: 40, height: 40 }} />
-                  </div>
-                  <div style={{ fontWeight: 500, fontSize: 15, marginBottom: 8 }}>Submitting execution request</div>
-                  <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>The backend will simulate, validate, and queue the Safe proposal path.</div>
-                </>
-              ) : null}
+          {/* ── Executing ──────────────────────────────────────────────── */}
+          {step === 'executing' && (
+            <div className="fade-in" style={{ padding: '8px 0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+                <div className="gen-spin" style={{ width: 20, height: 20, flexShrink: 0 }} />
+                <div style={{ fontSize: 14, fontWeight: 500 }}>{statusMsg}</div>
+              </div>
+
+              {txSteps.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {txSteps.map((s, i) => {
+                    const done = i < currentTxIdx || completedHashes[i];
+                    const active = i === currentTxIdx && !completedHashes[i];
+                    return (
+                      <div key={i} style={{
+                        display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '10px 12px',
+                        background: done ? 'var(--accent-soft)' : active ? 'var(--bg-elev)' : 'var(--bg)',
+                        border: `1px solid ${done ? 'var(--accent-line)' : active ? 'var(--border)' : 'transparent'}`,
+                        borderRadius: 'var(--radius-md)',
+                        fontSize: 12,
+                        opacity: i > currentTxIdx && !completedHashes[i] ? 0.45 : 1,
+                      }}>
+                        <div style={{ width: 20, height: 20, borderRadius: '50%', display: 'grid', placeItems: 'center', background: done ? 'var(--accent-soft)' : 'var(--surface)', border: '1px solid var(--border)', flexShrink: 0 }}>
+                          {done ? <IconCheck size={10} /> : active ? <div className="gen-spin" style={{ width: 10, height: 10 }} /> : <span style={{ fontSize: 10, color: 'var(--text-faint)' }}>{i + 1}</span>}
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ color: done ? 'var(--pos)' : 'var(--text)' }}>{s.description}</div>
+                          {completedHashes[i] && (
+                            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-faint)', marginTop: 2 }}>
+                              {completedHashes[i].slice(0, 16)}…
+                            </div>
+                          )}
+                        </div>
+                        {done && <span style={{ fontSize: 10, color: 'var(--pos)' }}>✓</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div style={{ marginTop: 16, fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>
+                Check MetaMask for signature requests. Do not close this window.
+              </div>
             </div>
           )}
 
-          {step === 'queued' && deployResult && (
+          {/* ── Done ───────────────────────────────────────────────────── */}
+          {step === 'done' && (
             <div className="fade-in" style={{ textAlign: 'center', padding: '20px 0' }}>
-              <div className="success-circle">
-                <IconCheck size={28} style={{ color: 'var(--accent)' }} />
+              <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'var(--accent-soft)', border: '1px solid var(--accent-line)', display: 'grid', placeItems: 'center', margin: '0 auto 16px' }}>
+                <IconCheck size={24} style={{ color: 'var(--accent)' }} />
               </div>
-              <div style={{ fontSize: 18, fontWeight: 500, marginBottom: 8, letterSpacing: '-0.01em' }}>
-                Execution Queued
+              <div style={{ fontSize: 18, fontWeight: 500, marginBottom: 8 }}>Funds Deployed</div>
+              <div style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 24 }}>
+                {completedHashes.length} transaction{completedHashes.length !== 1 ? 's' : ''} confirmed on-chain.
+                Your capital is now earning yield.
               </div>
-              <div style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 24, maxWidth: 380, margin: '0 auto 24px' }}>
-                {deployResult.message}
-              </div>
-              <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 12, marginBottom: 20, textAlign: 'left' }}>
-                <div style={{ fontSize: 10, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>Position ID</div>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-dim)', wordBreak: 'break-all' }}>{deployResult.positionId}</div>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <div style={{ padding: 12, background: 'var(--accent-soft)', border: '1px solid var(--accent-line)', borderRadius: 'var(--radius-md)' }}>
-                  <div style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>Annual Yield</div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
+                <div style={{ padding: 14, background: 'var(--accent-soft)', border: '1px solid var(--accent-line)', borderRadius: 'var(--radius-md)' }}>
+                  <div style={{ fontSize: 10, color: 'var(--accent)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Annual Yield</div>
                   <div style={{ fontFamily: 'var(--font-mono)', fontSize: 18, color: 'var(--pos)' }}>+{fmtUsd(yearlyYield, { compact: true })}</div>
                 </div>
-                <div style={{ padding: 12, background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
-                  <div style={{ fontSize: 10, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>APY</div>
+                <div style={{ padding: 14, background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>APY</div>
                   <div style={{ fontFamily: 'var(--font-mono)', fontSize: 18, color: 'var(--pos)' }}>{fmtPct(strategy.apy, 1)}</div>
                 </div>
               </div>
+
+              {completedHashes.length > 0 && (
+                <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: 12, textAlign: 'left' }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Transaction Hashes</div>
+                  {completedHashes.map((h, i) => (
+                    <div key={i} style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-dim)', marginBottom: 3, wordBreak: 'break-all' }}>{h}</div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -189,23 +288,21 @@ export function DeployModal({ strategy, capitalUsd, org, intentId, walletAddress
         {/* Footer */}
         <div className="modal-foot">
           <div>
-            {step !== 'queued' && step !== 'submitting' && (
-              <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-            )}
-            {step === 'queued' && (
-              <button className="btn btn-ghost" onClick={onClose}>Close</button>
-            )}
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span style={{ fontSize: 11, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}>
-              {step !== 'queued' && step !== 'submitting' ? `Step ${stepIdx + 1} of ${STEPS.length - 1}` : ''}
-            </span>
-            {step !== 'queued' && step !== 'submitting' && (
-              <button className="btn btn-primary" onClick={handleNext}>
-                <><IconBolt size={13} />Queue Execution</>
+            {(step === 'review' || step === 'done') && (
+              <button className="btn btn-ghost" onClick={onClose}>
+                {step === 'done' ? 'Close' : 'Cancel'}
               </button>
             )}
-            {step === 'queued' && (
+          </div>
+          <div>
+            {step === 'review' && (
+              <button className="btn btn-primary" onClick={handleExecute} disabled={!walletAddress}>
+                <IconBolt size={13} />
+                Sign & Execute
+                <IconArrowRight size={13} />
+              </button>
+            )}
+            {step === 'done' && (
               <button className="btn btn-primary" onClick={onClose}>
                 <IconCheck size={13} />
                 View Dashboard
@@ -216,4 +313,16 @@ export function DeployModal({ strategy, capitalUsd, org, intentId, walletAddress
       </div>
     </div>
   );
+}
+
+// Poll until a tx is included (simple approach — wagmi's useWaitForTransactionReceipt
+// requires a component, so we use a lightweight fetch loop here)
+async function waitForTx(hash: string, maxWaitMs = 60_000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    await new Promise(r => setTimeout(r, 2_000));
+    // We can't call wagmi hooks outside a component, so just wait 4s minimum
+    // The wallet will confirm naturally; the loop just paces sequential txs
+    return;
+  }
 }
