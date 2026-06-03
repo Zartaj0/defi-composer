@@ -139,7 +139,7 @@ export function StrategyGrid({ strategies, capitalUsd, onSelect, onBack }: Strat
         <div style={{ background: 'var(--accent-soft)', border: '1px solid var(--accent-line)', borderRadius: 'var(--radius-md)', padding: '10px 16px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10, fontSize: 13 }}>
           <IconShield size={14} style={{ color: 'var(--accent)' }} />
           <span>
-            Best strategy: <strong>{best.name}</strong> — {fmtPct(best.apy, 1)} APY ({fmtPct(best.benchmarkDelta, 1, true)} vs T-bill benchmark) · Gas recoverable in {Math.ceil(best.gasUsd / (capitalUsd * (best.apy / 100) / 365))} days
+            Best strategy: <strong>{best.name}</strong> — {fmtPct(best.apy, 1)} APY ({fmtPct(best.benchmarkDelta, 1, true)} vs T-bill benchmark){capitalUsd > 0 && best.apy > 0 ? ` · Gas recoverable in ${Math.ceil(best.gasUsd / (capitalUsd * (best.apy / 100) / 365))} days` : ''}
           </span>
         </div>
       )}

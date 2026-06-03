@@ -91,8 +91,9 @@ export function GeneratingScreen({ intentText, capitalUsd, orgId, intentId, onDo
             }
           }
 
-          if (data.status === 'error' || data.data?.status === 'error') {
-            throw new Error('Strategy generation failed');
+          const backendStatus = data.data?.status ?? data.status;
+          if (backendStatus === 'failed' || backendStatus === 'cancelled') {
+            throw new Error('Strategy generation failed on the backend.');
           }
         } catch {
           // continue polling

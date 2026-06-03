@@ -222,6 +222,7 @@ export default function HomePage() {
           org={activeOrg}
           intentId={intentId}
           walletAddress={walletAddress}
+          safeAddress={activeOrg.safeAddress}
           onClose={() => {
             setDeployOpen(false);
             setView('dashboard');

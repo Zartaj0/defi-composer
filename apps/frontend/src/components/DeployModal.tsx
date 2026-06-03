@@ -11,6 +11,7 @@ interface DeployModalProps {
   org: Org;
   intentId?: string;
   walletAddress?: `0x${string}`;
+  safeAddress?: string;
   onClose: () => void;
 }
 
@@ -29,7 +30,7 @@ interface DeployResult {
   positionUrl: string;
 }
 
-export function DeployModal({ strategy, capitalUsd, org, intentId, walletAddress, onClose }: DeployModalProps) {
+export function DeployModal({ strategy, capitalUsd, org, intentId, walletAddress, safeAddress, onClose }: DeployModalProps) {
   const [step, setStep] = useState<DeployStep>('review');
   const [submitting, setSubmitting] = useState(false);
   const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
@@ -55,6 +56,7 @@ export function DeployModal({ strategy, capitalUsd, org, intentId, walletAddress
           intentId,
           orgId: org.id,
           walletAddress,
+          safeAddress: safeAddress ?? null,
           capitalUsd,
         }),
       });

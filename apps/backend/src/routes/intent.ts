@@ -141,8 +141,10 @@ export const intentRoutes: FastifyPluginAsync = async (app) => {
 
         // ── Step 4: Generate strategies inline (no Redis/BullMQ required) ──────
         // Fire-and-forget — frontend polls GET /intent/:id for status updates
-        void runPlannerInline(intentId, intent, orgId).catch((err) => {
+        void runPlannerInline(intentId, intent, orgId).catch(async (err) => {
           app.log.error({ err, intentId }, "Inline planner failed");
+          // Mark failed so the frontend polling exits cleanly instead of timing out
+          try { await updateIntentStatus(intentId, "failed"); } catch { /* ignore */ }
         });
 
         app.log.info({ intentId, orgId }, "Intent received, planner started");

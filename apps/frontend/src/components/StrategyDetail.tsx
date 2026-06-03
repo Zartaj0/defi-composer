@@ -348,7 +348,7 @@ export function StrategyDetail({ strategy, capitalUsd, onDeploy, onBack }: Strat
         <div className="stat">
           <div className="lbl">Gas Cost</div>
           <div className="val">{fmtUsd(strategy.gasUsd)}</div>
-          <div className="sub">~{Math.ceil(strategy.gasUsd / (yearlyYield / 365))}d payback</div>
+          <div className="sub">~{yearlyYield > 0 ? Math.ceil(strategy.gasUsd / (yearlyYield / 365)) : '—'}d payback</div>
         </div>
       </div>
 

@@ -10,10 +10,13 @@ out
 build
 **/dist
 
-# Environment
+# Environment — never commit pulled env files; Vercel dashboard is the source of truth
 .env
 .env.local
 .env.*.local
+.env.production
+.env.development
+.env.preview
 
 # Turbo
 .turbo
@@ -40,3 +43,4 @@ npm-debug.log*
 cache
 artifacts
 broadcast
+.vercel

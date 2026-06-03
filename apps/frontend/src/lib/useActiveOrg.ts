@@ -122,9 +122,9 @@ async function ensureBackendOrg(
 ): Promise<string> {
   const orgId = deriveOrgId(address);
 
-  // Try GET first — if it exists, return it
+  // Try GET first — use the orgs endpoint (snapshot can 500 on RPC failure even when org exists)
   try {
-    const res = await fetch(`${API_BASE}/api/v1/treasury/${orgId}/snapshot`);
+    const res = await fetch(`${API_BASE}/api/v1/treasury/orgs/${orgId}`);
     if (res.ok) return orgId;
   } catch {}
 

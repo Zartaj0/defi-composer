@@ -27,9 +27,13 @@ import type {
 } from "@defi-composer/shared";
 
 // ─── On-chain readers ─────────────────────────────────────────────────────────
+// 5-second timeout prevents a slow/rate-limited public RPC from stalling the
+// snapshot endpoint and tying up the Fastify thread.
 const publicClient = createPublicClient({
   chain: base,
-  transport: http(process.env["BASE_RPC_URL"] ?? "https://mainnet.base.org"),
+  transport: http(process.env["BASE_RPC_URL"] ?? "https://mainnet.base.org", {
+    timeout: 5_000,
+  }),
 });
 
 const ERC20_BALANCE_ABI = [
