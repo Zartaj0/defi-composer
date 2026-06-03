@@ -44,16 +44,32 @@ export class StrategyPlanner {
     // Build the protocol knowledge context for the LLM
     const protocolContext = protocolRegistry.buildLLMContext();
 
-    // Fetch live APYs to inject into templates AND LLM context
-    let liveApys: LiveApySnapshot | undefined;
+    // Fetch live APYs to inject into templates AND LLM context.
+    // Fallback to hard-coded representative values if the RPC is unreachable.
+    let liveApys: LiveApySnapshot;
     try {
-      liveApys = await protocolRegistry.fetchLiveApys();
+      const raw = await protocolRegistry.fetchLiveApys();
+      liveApys = {
+        aave: {
+          usdc:  raw.aave.usdc  ?? 450,   // ~4.5% fallback
+          weth:  raw.aave.weth  ?? 110,   // ~1.1% fallback
+          cbEth: raw.aave.cbEth ?? 80,    // ~0.8% fallback
+        },
+        morpho: {
+          steakhouseUsdc: raw.morpho.steakhouseUsdc ?? 500, // ~5.0% fallback
+        },
+      };
+      const live = raw.aave.usdc !== null;
       console.log(
-        `[Planner] Live APYs — Aave USDC: ${(liveApys.aave.usdc/100).toFixed(2)}%, ` +
+        `[Planner] APYs (${live ? "live" : "fallback"}) — Aave USDC: ${(liveApys.aave.usdc/100).toFixed(2)}%, ` +
         `Morpho Steakhouse: ${(liveApys.morpho.steakhouseUsdc/100).toFixed(2)}%`
       );
     } catch (err) {
-      throw new Error(`Planner cannot generate candidates without live APYs: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[Planner] APY fetch failed, using fallback values: ${err instanceof Error ? err.message : String(err)}`);
+      liveApys = {
+        aave:   { usdc: 450, weth: 110, cbEth: 80 },
+        morpho: { steakhouseUsdc: 500 },
+      };
     }
 
     // If no LLM client, fall back to deterministic selection

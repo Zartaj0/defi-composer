@@ -76,11 +76,16 @@ export function GeneratingScreen({ intentText, capitalUsd, orgId, intentId, onDo
             const candRes = await fetch(`${API_BASE}/api/v1/intent/${intentId}/candidates`);
             if (candRes.ok) {
               const candData = await candRes.json();
-              const strategies = candData.data || candData;
-              if (Array.isArray(strategies) && strategies.length > 0) {
+              // Backend returns { success, data: { status, candidates: [...] } }
+              const candidates: CandidateStrategy[] =
+                candData.data?.candidates ??
+                (Array.isArray(candData.data) ? candData.data : null) ??
+                candData.candidates ??
+                (Array.isArray(candData) ? candData : []);
+              if (candidates.length > 0) {
                 setStepStatuses(prev => prev.map(() => 'done'));
                 await delay(400);
-                onDone((strategies as CandidateStrategy[]).map(candidate => candidateToStrategy(candidate, capitalUsd)));
+                onDone(candidates.map(candidate => candidateToStrategy(candidate, capitalUsd)));
                 return;
               }
             }

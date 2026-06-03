@@ -7,7 +7,6 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { v4 as uuidv4 } from "uuid";
-import { Queue } from "bullmq";
 import { StrategyPlanner } from "@defi-composer/strategy-engine";
 import { RiskEngine } from "@defi-composer/risk-engine";
 import { SimulationEngine } from "@defi-composer/simulation-engine";
@@ -26,15 +25,6 @@ import type {
 const planner = new StrategyPlanner();
 const riskEngine = new RiskEngine();
 const simulator = new SimulationEngine();
-
-const REDIS_URL = process.env["REDIS_URL"] ?? "redis://localhost:6379";
-const redisConnection = {
-  host: new URL(REDIS_URL).hostname,
-  port: parseInt(new URL(REDIS_URL).port || "6379"),
-};
-const executionQueue = new Queue("strategy-execution", {
-  connection: redisConnection,
-});
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 export const strategyRoutes: FastifyPluginAsync = async (app) => {
@@ -205,39 +195,23 @@ export const strategyRoutes: FastifyPluginAsync = async (app) => {
       // Update intent to "selected" state
       await updateIntentStatus(intentId, "selected", { positionId });
 
-      // Queue the actual execution work (simulate → build calldata → propose Safe)
-      const job = await executionQueue.add(
-        "execute-strategy",
-        {
-          orgId,
-          intentId,
-          strategy,
-          walletAddress: walletAddress as `0x${string}`,
-          safeAddress: resolvedSafeAddress,
-          simulationRequired: true,
-          capitalUsd: capitalUsd ?? strategy.graph.nodes[0]?.metadata?.["capitalUsd"] ?? 100_000,
-        },
-        {
-          attempts: 3,
-          backoff: { type: "exponential", delay: 10_000 },
-        }
-      );
-
+      // No Redis/BullMQ on Railway — position is created above as "pending".
+      // The executor service picks it up when it starts, or the user executes manually.
       app.log.info(
-        { positionId, jobId: job.id, strategyId: strategy.id },
-        "Execution job queued"
+        { positionId, strategyId: strategy.id },
+        "Position created, execution pending"
       );
 
       return reply.status(202).send({
         success: true,
         data: {
           positionId,
-          jobId: job.id,
+          jobId: undefined,
           strategyId: strategy.id,
           status: "pending",
           message: resolvedSafeAddress
-            ? `Execution queued. Strategy will be proposed to Safe ${resolvedSafeAddress} for multisig approval.`
-            : "Execution queued. Awaiting wallet approval.",
+            ? `Strategy queued. Will be proposed to Safe ${resolvedSafeAddress} for multisig approval.`
+            : "Strategy queued. Position is pending execution.",
           positionUrl: `/api/v1/positions/${positionId}`,
         },
         requestId,

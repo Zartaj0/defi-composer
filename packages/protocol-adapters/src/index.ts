@@ -37,39 +37,43 @@ export class ProtocolRegistry {
     return Array.from(this.adapters.values());
   }
 
-  // Fetch live APYs from all protocols — used by strategy engine to inject real rates
+  // Fetch live APYs from all protocols — used by strategy engine to inject real rates.
+  // Returns partial data with null for any protocol that fails; never throws.
   async fetchLiveApys(): Promise<{
-    aave: { usdc: number; weth: number; cbEth: number };
-    morpho: { steakhouseUsdc: number };
+    aave: { usdc: number | null; weth: number | null; cbEth: number | null };
+    morpho: { steakhouseUsdc: number | null };
   }> {
     const aaveAdapter = this.get("aave-v3") as AaveV3Adapter;
     const morphoAdapter = this.get("morpho-blue") as MorphoBlueAdapter;
 
-    const [aaveUsdc, aaveWeth, aaveCbEth, morphoData] =
-      await Promise.allSettled([
-        aaveAdapter.getMarket("USDC"),
-        aaveAdapter.getMarket("WETH"),
-        aaveAdapter.getMarket("cbETH"),
+    // 10-second timeout per call so a hung RPC doesn't stall the endpoint
+    function withTimeout<T>(p: Promise<T>, ms = 10_000): Promise<T | null> {
+      return Promise.race([
+        p.then(v => v).catch(() => null),
+        new Promise<null>(resolve => setTimeout(() => resolve(null), ms)),
+      ]);
+    }
+
+    const [aaveUsdc, aaveWeth, aaveCbEth, morphoData] = await Promise.all([
+      withTimeout(aaveAdapter.getMarket("USDC")),
+      withTimeout(aaveAdapter.getMarket("WETH")),
+      withTimeout(aaveAdapter.getMarket("cbETH")),
+      withTimeout(
         morphoAdapter.getMarkets().then(m => {
           const usdc = m.find(x => x.asset === "USDC");
-          if (!usdc) throw new Error("Morpho Steakhouse USDC market unavailable");
-          return { apyBps: usdc.supplyApyBps };
-        }),
-      ]);
-
-    if (aaveUsdc.status !== "fulfilled" || !aaveUsdc.value) throw new Error("Aave USDC APY unavailable");
-    if (aaveWeth.status !== "fulfilled" || !aaveWeth.value) throw new Error("Aave WETH APY unavailable");
-    if (aaveCbEth.status !== "fulfilled" || !aaveCbEth.value) throw new Error("Aave cbETH APY unavailable");
-    if (morphoData.status !== "fulfilled") throw new Error("Morpho Steakhouse APY unavailable");
+          return usdc ? { apyBps: usdc.supplyApyBps } : null;
+        })
+      ),
+    ]);
 
     return {
       aave: {
-        usdc: aaveUsdc.value.supplyApyBps,
-        weth: aaveWeth.value.supplyApyBps,
-        cbEth: aaveCbEth.value.supplyApyBps,
+        usdc: aaveUsdc?.supplyApyBps ?? null,
+        weth: aaveWeth?.supplyApyBps ?? null,
+        cbEth: aaveCbEth?.supplyApyBps ?? null,
       },
       morpho: {
-        steakhouseUsdc: morphoData.value.apyBps,
+        steakhouseUsdc: morphoData?.apyBps ?? null,
       },
     };
   }

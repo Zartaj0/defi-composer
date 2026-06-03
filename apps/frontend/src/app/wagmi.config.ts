@@ -1,6 +1,6 @@
 import { getDefaultConfig } from "@rainbow-me/rainbowkit";
 import { mainnet, base, baseSepolia } from "wagmi/chains";
-import { defineChain } from "viem";
+import { defineChain, http } from "viem";
 
 // WalletConnect project ID — set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID in .env
 const projectId =
@@ -47,16 +47,28 @@ export const baseFork = defineChain({
 const isForkMode    = Boolean(forkRpcUrl);
 const isStagenet    = Boolean(stagenetRpcUrl) || !isForkMode; // stagenet always available
 
+// ── Reliable public RPC transports ───────────────────────────────────────────
+// Avoids wagmi's default eth.merkle.io transport which is heavily rate-limited.
+// Cloudflare and base.org public endpoints have no CORS or rate-limit issues.
 export const wagmiConfig = isForkMode
   ? getDefaultConfig({
       appName: "DeFi Composer",
       projectId,
       chains: [baseFork],
       ssr: true,
+      transports: {
+        [baseFork.id]: http(forkRpcUrl || "http://127.0.0.1:8545"),
+      },
     })
   : getDefaultConfig({
       appName: "DeFi Composer",
       projectId,
       chains: [contractDevStagenet, mainnet, base, baseSepolia],
       ssr: true,
+      transports: {
+        [contractDevStagenet.id]: http(stagenetRpcUrl || "https://rpc.contract.dev/775c3bd2d7a94c2e426551614d6de126"),
+        [mainnet.id]:    http("https://cloudflare-eth.com"),
+        [base.id]:       http("https://mainnet.base.org"),
+        [baseSepolia.id]: http("https://sepolia.base.org"),
+      },
     });
