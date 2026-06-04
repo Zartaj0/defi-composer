@@ -1,8 +1,17 @@
 # ── DeFi Composer — Backend API (Railway) ─────────────────────
-# Uses turbo to resolve build order automatically from the
-# dependency graph (^build). No Anvil/Foundry required.
+# Includes Foundry (Anvil) for fork simulations.
 
 FROM node:20-slim
+
+# System deps: curl + git for Foundry installer; procps for process management
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl git ca-certificates procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Foundry (includes anvil) — pins to the stable nightly build
+RUN curl -L https://foundry.paradigm.xyz | bash
+ENV PATH="/root/.foundry/bin:$PATH"
+RUN foundryup
 
 # Install pnpm via corepack
 ENV PNPM_HOME="/pnpm"

@@ -680,6 +680,24 @@ export function stopAgentLoop(): void {
   console.log("[Agent] Autonomous loop stopped.");
 }
 
+/** Force-scan a single org immediately (bypasses the 5-min interval). */
+export async function forceScanOrg(orgId: string): Promise<void> {
+  const { listOrgs } = await import("@defi-composer/db");
+  const orgs = await listOrgs();
+  const org = orgs.find(o => o.id === orgId);
+  if (!org) {
+    console.warn(`[Agent] forceScanOrg: org ${orgId} not found`);
+    return;
+  }
+  const chainWallets = org.wallets.filter((w: { chainId: number }) => w.chainId === activeChainId);
+  const walletAddress = (chainWallets[0] ?? org.wallets[0])?.address ?? "";
+  if (!walletAddress) {
+    console.warn(`[Agent] forceScanOrg: no wallet for org ${orgId}`);
+    return;
+  }
+  await scanOrg(org.id, org.safeAddress ?? null, walletAddress);
+}
+
 export function getAgentStatus() {
   return {
     running,

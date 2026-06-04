@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { getOrg, listMandatesForOrg } from "@defi-composer/db";
 import type { ApiResponse } from "@defi-composer/shared";
-import { getAgentStatus } from "../agent/agent-loop.js";
+import { getAgentStatus, forceScanOrg } from "../agent/agent-loop.js";
 
 export const agentRoutes: FastifyPluginAsync = async (app) => {
 
@@ -45,13 +45,12 @@ export const agentRoutes: FastifyPluginAsync = async (app) => {
           } satisfies ApiResponse<never>);
         }
 
-        // Import lazily to avoid circular deps
-        const { scanAllOrgs } = await import("../agent/agent-loop.js") as typeof import("../agent/agent-loop.js") & { scanAllOrgs?: () => Promise<void> };
-
-        // scanAllOrgs is not exported — just acknowledge and let the loop handle it
-        // The loop fires immediately on next interval; for a true force-scan
-        // we'd export scanOrg from agent-loop, but this is good enough for now.
-        app.log.info({ orgId, requestId }, "Manual scan acknowledged — next loop will pick it up");
+        // Fire the scan immediately in the background — don't await so the HTTP
+        // response returns right away while the simulation runs async.
+        app.log.info({ orgId, requestId }, "Triggering immediate scan for org");
+        void forceScanOrg(orgId).catch(err =>
+          app.log.error({ err, orgId }, "Force scan failed")
+        );
 
         return reply.status(202).send({
           success: true,
@@ -59,7 +58,7 @@ export const agentRoutes: FastifyPluginAsync = async (app) => {
             orgId,
             orgName: org.name,
             activeMandateCount: activeMandates.length,
-            message: "Agent acknowledged. The next scan cycle will process this org.",
+            message: "Scan started immediately. Check /mandate/:id activity in ~30s.",
             agentStatus: getAgentStatus(),
           },
           requestId,
