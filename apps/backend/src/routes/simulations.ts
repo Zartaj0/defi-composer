@@ -7,7 +7,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { v4 as uuidv4 } from "uuid";
-import { isAddress, createPublicClient } from "viem";
+import { isAddress, createPublicClient, http } from "viem";
 import { Queue } from "bullmq";
 import {
   getMandate,
@@ -618,8 +618,10 @@ export const simulationRoutes: FastifyPluginAsync = async (app) => {
               : (process.env["BASE_RPC_URL"] ?? "https://mainnet.base.org");
             const moduleAddr = process.env["MODULE_ADDRESS"] ?? "";
 
+            // Use the explicitly computed rpcUrl (chain-aware), NOT createFallbackTransport()
+            // which may resolve to a different URL depending on env var names.
             const client = createPublicClient({
-              transport: createFallbackTransport(),
+              transport: http(rpcUrl, { timeout: 10_000 }),
             });
 
             // Parallel onchain reads
@@ -682,7 +684,7 @@ export const simulationRoutes: FastifyPluginAsync = async (app) => {
             const USDC_ADDR  = addrs.usdc;
             const AUSDC_ADDR = addrs.ausdc;
 
-            void rpcUrl; // used for context; client uses createFallbackTransport()
+            app.log.info({ rpcUrl, chainId, treasuryAddress }, "Fetching onchain balances");
 
             const [usdcRaw, ausdcRaw, enabled, policyRaw] = await Promise.allSettled([
               client.readContract({ address: USDC_ADDR,  abi: ERC20_ABI, functionName: "balanceOf", args: [treasuryAddress as `0x${string}`] }),
@@ -711,7 +713,7 @@ export const simulationRoutes: FastifyPluginAsync = async (app) => {
               })() : null,
             };
           } catch (onchainErr) {
-            app.log.warn({ onchainErr }, "Failed to fetch onchain Safe status — returning DB data only");
+            app.log.warn({ onchainErr, treasuryAddress, rpcUrl: process.env["BASE_RPC_URL"] }, "Failed to fetch onchain balance — returning DB data only");
           }
         }
 

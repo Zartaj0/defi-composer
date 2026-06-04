@@ -461,7 +461,24 @@ export default function MandatePage() {
       const res = await fetch(`${API_BASE}/api/v1/mandates/${mandateId}`);
       if (!res.ok) throw new Error(`Failed to load mandate (${res.status})`);
       const json = await res.json();
-      setMandate(json?.data as MandateData);
+      const raw = json?.data as Record<string, unknown> & {
+        versions?: Array<Record<string, unknown>>;
+        activeVersionId?: string;
+      };
+      // Policy fields live on the active version, not the top-level mandate object.
+      // Flatten them so the rest of the page can read them uniformly.
+      const activeVersion =
+        raw?.versions?.find((v) => v["id"] === raw.activeVersionId) ??
+        raw?.versions?.[0] ??
+        {};
+      setMandate({
+        ...raw,
+        reserveFloorUsd:    activeVersion["reserveFloorUsd"]    ?? 0,
+        maxSingleActionUsd: activeVersion["maxSingleActionUsd"] ?? null,
+        approvedAssets:     activeVersion["approvedAssets"]     ?? [],
+        approvedProtocols:  activeVersion["approvedProtocols"]  ?? [],
+        approvedActions:    activeVersion["approvedActions"]    ?? [],
+      } as MandateData);
     } catch (e) {
       setFetchError(e instanceof Error ? e.message : "Unknown error");
     } finally {
