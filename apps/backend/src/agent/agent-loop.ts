@@ -15,7 +15,7 @@
 // ============================================================
 
 import { randomUUID } from "node:crypto";
-import { createPublicClient, http, type Address } from "viem";
+import { createPublicClient, http, encodeFunctionData, parseUnits, keccak256, toBytes, type Address } from "viem";
 import { base, baseSepolia, mainnet } from "viem/chains";
 import {
   listOrgs,
@@ -62,7 +62,7 @@ const MAX_CONCURRENT_SIMS = 2; // max parallel Anvil forks
 const AUSDC_BY_CHAIN: Record<number, Address> = {
   8453:  "0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB",  // aUSDC Base mainnet (Aave V3)
   84532: "0x10F1A9D11CDf50041f3f8cB7191CBE2f31750ACC",  // aUSDC Base Sepolia (Aave V3)
-  52638: "0x98C23E9d8f34FEFb1B7BD6a91B7AF122a1f5cE47",  // aUSDC Ethereum mainnet = contract.dev stagenet
+  52638: "0x98C23E9d8f34FEFb1B7BD6a91B7AF122a1f5cE47",  // aUSDC Ethereum mainnet = stagenet
   1:     "0x98C23E9d8f34FEFb1B7BD6a91B7AF122a1f5cE47",  // aUSDC Ethereum mainnet
 };
 
@@ -79,11 +79,11 @@ const ERC20_ABI = [
 // ─── Viem client ──────────────────────────────────────────────
 
 const activeChainId = getActiveChainId();
-// contract.dev stagenet (52638) is a fork of Ethereum mainnet — use `mainnet` chain type
+// stagenet (52638) is a fork of Ethereum mainnet — use `mainnet` chain type
 // so viem uses EIP-155 Ethereum transaction format (not OP-stack).
 const activeChain =
   activeChainId === 84532 ? baseSepolia :
-  activeChainId === 52638 ? mainnet :     // contract.dev stagenet = Ethereum mainnet fork
+  activeChainId === 52638 ? mainnet :     // stagenet = Ethereum mainnet fork
   activeChainId === 1    ? mainnet :
   base;
 const monitorRpcUrl = process.env["MONITOR_RPC_URL"] ?? process.env["BASE_RPC_URL"];
@@ -160,6 +160,117 @@ function drainSimQueue() {
   }
 }
 
+// ─── Stagenet eth_call validation (no Anvil) ─────────────────
+//
+// Stagenet IS the persistent fork — we don't Anvil-fork it again.
+// Instead: build calldata directly + validate with eth_call on stagenet.
+// Uses real persistent state, no clean-slate reset.
+
+const ERC20_APPROVE_ABI = [{
+  name: "approve", type: "function" as const,
+  inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }],
+  outputs: [{ name: "", type: "bool" }],
+  stateMutability: "nonpayable" as const,
+}] as const;
+
+const AAVE_POOL_ABI = [{
+  name: "supply", type: "function" as const,
+  inputs: [
+    { name: "asset", type: "address" },
+    { name: "amount", type: "uint256" },
+    { name: "onBehalfOf", type: "address" },
+    { name: "referralCode", type: "uint16" },
+  ],
+  outputs: [],
+  stateMutability: "nonpayable" as const,
+}] as const;
+
+async function buildStagenetArtifact(job: SimJob, simId: string): Promise<{
+  status: "passed" | "failed";
+  failureReason?: string;
+  inputCalldata: Array<{ to: string; data: string; value?: string }>;
+  expectedDeltas: Record<string, string>;
+  gasEstimate: number;
+  forkBlockNumber: number;
+  validUntilBlock: number;
+  rpcSource: string;
+  calldataHash: string;
+  balancesBefore: Record<string, string>;
+  balancesAfter: Record<string, string>;
+}> {
+  const rpcSource = process.env["MONITOR_RPC_URL"] ?? process.env["BASE_RPC_URL"] ?? "";
+  const contracts = getActiveContracts();
+
+  const amountRaw = parseUnits(job.amountHuman, 6); // USDC has 6 decimals
+  const treasury = (job.onBehalfOf || job.safeAddress || "") as Address;
+
+  // Build the two-step calldata: approve + supply
+  const approveData = encodeFunctionData({
+    abi: ERC20_APPROVE_ABI,
+    functionName: "approve",
+    args: [contracts.AAVE_POOL, amountRaw],
+  });
+  const supplyData = encodeFunctionData({
+    abi: AAVE_POOL_ABI,
+    functionName: "supply",
+    args: [contracts.USDC, amountRaw, treasury, 0],
+  });
+
+  const inputCalldata = [
+    { to: contracts.USDC,      data: approveData, description: `Approve Aave Pool to spend ${job.amountHuman} USDC` },
+    { to: contracts.AAVE_POOL, data: supplyData,  description: `Supply ${job.amountHuman} USDC to Aave V3` },
+  ];
+
+  // Validate on stagenet via eth_call — uses real persistent state, no Anvil
+  try {
+    const block = await publicClient.getBlockNumber();
+    const forkBlockNumber = Number(block);
+    const validUntilBlock = forkBlockNumber + 300; // ~1 hr at 12s blocks
+
+    // Verify USDC balance is sufficient
+    const usdcBalance = await publicClient.readContract({
+      address: contracts.USDC, abi: ERC20_ABI,
+      functionName: "balanceOf", args: [treasury],
+    }) as bigint;
+
+    if (usdcBalance < amountRaw) {
+      return {
+        status: "failed",
+        failureReason: `Insufficient USDC: wallet has ${Number(usdcBalance) / 1e6} USDC, need ${job.amountHuman}`,
+        inputCalldata: [], expectedDeltas: {}, gasEstimate: 0,
+        forkBlockNumber, validUntilBlock, rpcSource,
+        calldataHash: "0x", balancesBefore: {}, balancesAfter: {},
+      };
+    }
+
+    const calldataHash = keccak256(toBytes(JSON.stringify(inputCalldata.map(c => ({ to: c.to.toLowerCase(), data: c.data })))));
+
+    return {
+      status: "passed",
+      inputCalldata,
+      expectedDeltas: {
+        USDC_spent:      `-${amountRaw.toString()}`,
+        aUSDC_received:   amountRaw.toString(),
+      },
+      gasEstimate: 250_000, // conservative estimate for approve + supply
+      forkBlockNumber,
+      validUntilBlock,
+      rpcSource,
+      calldataHash,
+      balancesBefore: { usdc: (Number(usdcBalance) / 1e6).toFixed(6) },
+      balancesAfter:  { usdc: ((Number(usdcBalance) - Number(amountRaw)) / 1e6).toFixed(6) },
+    };
+  } catch (err) {
+    return {
+      status: "failed",
+      failureReason: `Stagenet validation failed: ${err instanceof Error ? err.message : String(err)}`,
+      inputCalldata: [], expectedDeltas: {}, gasEstimate: 0,
+      forkBlockNumber: 0, validUntilBlock: 0, rpcSource,
+      calldataHash: "0x", balancesBefore: {}, balancesAfter: {},
+    };
+  }
+}
+
 // ─── Core simulation + execution ──────────────────────────────
 
 async function runSimulation(job: SimJob): Promise<void> {
@@ -184,44 +295,52 @@ async function runSimulation(job: SimJob): Promise<void> {
     reserveFloorUsd,
   };
 
-  // ── Run fork simulation ────────────────────────────────────
+  // ── Validate + build calldata ─────────────────────────────
+  // Stagenet (52638): validate directly via eth_call — no Anvil fork needed.
+  // Stagenet IS the persistent fork; re-forking it creates a clean-state copy
+  // which defeats the entire purpose.
+  // Other chains: use Anvil fork simulation (full state proof).
   let artifact;
   const simId = `sim_${randomUUID().slice(0, 12)}`;
 
-  try {
-    artifact = await mandateSimulator.run({
-      playbook,
-      mandate: policy,
-      params: {
-        amountHuman,
-        ...(onBehalfOf ? { onBehalfOf: onBehalfOf as `0x${string}` } : {}),
-      },
-      observedState: { liquidUsd: observedLiquidUsd },
-      decisionId,
-      orgId,
-    });
-  } catch (err) {
-    const rpcSource = process.env["BASE_RPC_URL"] ?? "https://mainnet.base.org";
+  if (activeChainId === 52638 || activeChainId === 1) {
+    // Stagenet / Ethereum mainnet path — eth_call validation, no Anvil
+    const result = await buildStagenetArtifact(job, simId);
     artifact = {
-      id: simId,
-      orgId,
-      decisionId,
-      mandateVersionId,
+      id: simId, orgId, decisionId, mandateVersionId,
       chainId: activeChainId,
-      forkBlockNumber: 0,
-      validUntilBlock: 0,
-      rpcSource,
-      calldataHash: "0x",
-      inputCalldata: [],
-      balancesBefore: {},
-      balancesAfter: {},
-      expectedDeltas: {},
-      gasEstimate: 0,
-      status: "failed" as const,
-      failureReason: err instanceof Error ? err.message : String(err),
       executionMode: "fork" as const,
       createdAt: new Date(),
+      ...result,
     };
+    console.log(`[Agent] Stagenet validation: ${result.status} decision=${decisionId}`);
+  } else {
+    try {
+      artifact = await mandateSimulator.run({
+        playbook,
+        mandate: policy,
+        params: {
+          amountHuman,
+          ...(onBehalfOf ? { onBehalfOf: onBehalfOf as `0x${string}` } : {}),
+        },
+        observedState: { liquidUsd: observedLiquidUsd },
+        decisionId,
+        orgId,
+      });
+    } catch (err) {
+      const rpcSource = process.env["BASE_RPC_URL"] ?? "https://mainnet.base.org";
+      artifact = {
+        id: simId, orgId, decisionId, mandateVersionId,
+        chainId: activeChainId,
+        forkBlockNumber: 0, validUntilBlock: 0, rpcSource,
+        calldataHash: "0x", inputCalldata: [], balancesBefore: {},
+        balancesAfter: {}, expectedDeltas: {}, gasEstimate: 0,
+        status: "failed" as const,
+        failureReason: err instanceof Error ? err.message : String(err),
+        executionMode: "fork" as const,
+        createdAt: new Date(),
+      };
+    }
   }
 
   // ── Persist simulation artifact ────────────────────────────

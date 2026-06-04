@@ -669,7 +669,7 @@ export const simulationRoutes: FastifyPluginAsync = async (app) => {
                 usdc:  "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
                 ausdc: "0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB",
               },
-              // contract.dev stagenet (52638) + Ethereum mainnet (1) — same addresses
+              // stagenet (52638) + Ethereum mainnet (1) — same addresses
               52638: {
                 usdc:  "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
                 ausdc: "0x98C23E9d8f34FEFb1B7BD6a91B7AF122a1f5cE47",

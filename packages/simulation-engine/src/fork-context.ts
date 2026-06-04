@@ -44,8 +44,8 @@ export const BASE_CONTRACTS = {
   SAFE_COMPAT_FALLBACK: "0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99" as `0x${string}`,
 } as const;
 
-// ─── Ethereum mainnet addresses (used by contract.dev stagenet, chainId 52638) ──
-// contract.dev is a fork of Ethereum mainnet — same addresses as mainnet.
+// ─── Ethereum mainnet addresses (used by stagenet, chainId 52638) ──
+// Stagenet is a persistent fork of Ethereum mainnet — same addresses as mainnet.
 export const ETH_MAINNET_CONTRACTS = {
   USDC:           "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as `0x${string}`,
   WETH:           "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" as `0x${string}`,
@@ -86,7 +86,7 @@ export type ChainContracts = typeof BASE_CONTRACTS;
 export function getActiveContracts(): ChainContracts {
   const id = getActiveChainId();
   if (id === 84532) return BASE_SEPOLIA_CONTRACTS;
-  if (id === 52638) return ETH_MAINNET_CONTRACTS;  // contract.dev stagenet (Ethereum mainnet fork)
+  if (id === 52638) return ETH_MAINNET_CONTRACTS;  // stagenet (persistent Ethereum mainnet fork)
   return BASE_CONTRACTS;
 }
 
