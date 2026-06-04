@@ -7,41 +7,55 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
 import { v4 as uuidv4 } from "uuid";
-import { Redis } from "ioredis";
 import { listOrgAlerts } from "@defi-composer/db";
 import type { Alert } from "@defi-composer/shared";
 
 export const REDIS_ALERT_CHANNEL = "defi-composer:alerts";
 
-// ── Redis subscriber (separate connection from BullMQ) ────────
-const REDIS_URL = process.env["REDIS_URL"] ?? "redis://localhost:6379";
-const redisSub = new Redis(REDIS_URL);
-
 // ── In-memory subscriber registry ─────────────────────────────
 // Maps orgId → Set of active WebSocket connections
 const subscribers = new Map<string, Set<WebSocket>>();
 
-// Start subscribing to Redis channel once
-redisSub.subscribe(REDIS_ALERT_CHANNEL).then(() => {
-  console.log(`[Alerts] Subscribed to Redis channel: ${REDIS_ALERT_CHANNEL}`);
-}).catch((err: unknown) => {
-  console.error("[Alerts] Redis subscribe error:", err);
-});
+// ── Optional Redis pub/sub (only if REDIS_URL is configured) ──
+// The backend is Redis-free by default. Redis is only used here
+// for cross-process alert broadcasting (e.g. from external services).
+// Without Redis, alerts still work in-process via broadcastAlert().
+const REDIS_URL = process.env["REDIS_URL"];
 
-redisSub.on("message", (_channel: string, message: string) => {
-  try {
-    const payload = JSON.parse(message) as { orgId: string; alert: Alert };
-    // Broadcast to all ws clients for this org AND global listeners
-    const orgSubs = subscribers.get(payload.orgId) ?? new Set<WebSocket>();
-    const globalSubs = subscribers.get("*") ?? new Set<WebSocket>();
-    const wsPayload = JSON.stringify({ type: "alert", ...payload });
-    for (const ws of [...orgSubs, ...globalSubs]) {
-      if (ws.readyState === 1) ws.send(wsPayload);
-    }
-  } catch (err) {
-    console.error("[Alerts] Failed to parse Redis message:", err);
-  }
-});
+if (REDIS_URL) {
+  // Lazy import so ioredis is not imported when Redis is absent
+  import("ioredis").then(({ Redis }) => {
+    const redisSub = new Redis(REDIS_URL);
+    redisSub.subscribe(REDIS_ALERT_CHANNEL).then(() => {
+      console.log(`[Alerts] Redis pub/sub active on channel: ${REDIS_ALERT_CHANNEL}`);
+    }).catch((err: unknown) => {
+      console.error("[Alerts] Redis subscribe error:", err);
+    });
+
+    redisSub.on("message", (_channel: string, message: string) => {
+      try {
+        const payload = JSON.parse(message) as { orgId: string; alert: Alert };
+        const orgSubs    = subscribers.get(payload.orgId) ?? new Set<WebSocket>();
+        const globalSubs = subscribers.get("*")           ?? new Set<WebSocket>();
+        const wsPayload  = JSON.stringify({ type: "alert", ...payload });
+        for (const ws of [...orgSubs, ...globalSubs]) {
+          if (ws.readyState === 1) ws.send(wsPayload);
+        }
+      } catch (err) {
+        console.error("[Alerts] Failed to parse Redis message:", err);
+      }
+    });
+
+    redisSub.on("error", (err: Error) => {
+      // Log but don't crash — in-process broadcasts still work
+      console.warn("[Alerts] Redis connection error (alerts degraded):", err.message);
+    });
+  }).catch((err: unknown) => {
+    console.warn("[Alerts] ioredis not available:", err);
+  });
+} else {
+  console.log("[Alerts] REDIS_URL not set — Redis pub/sub disabled. In-process alerts only.");
+}
 
 // Broadcast an alert to all subscribers for an org
 export function broadcastAlert(orgId: string, alert: Alert): void {

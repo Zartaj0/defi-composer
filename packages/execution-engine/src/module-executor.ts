@@ -34,7 +34,7 @@ import {
   type Hex,
   type Address,
 } from "viem";
-import { base, baseSepolia } from "viem/chains";
+import { base, baseSepolia, mainnet } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import type { SafeTxStruct } from "@defi-composer/simulation-engine";
 import { encodeSafeTxForSigning } from "@defi-composer/simulation-engine";
@@ -100,15 +100,35 @@ function encodeSimIdAsBytes32(simulationId: string): Hex {
 // ─── Env helpers ──────────────────────────────────────────────
 
 function getChainId(): number { return parseInt(process.env["CHAIN_ID"] ?? "8453", 10); }
-/** Returns the RPC URL that matches the active CHAIN_ID. */
+
+/** Returns the RPC URL that matches the active CHAIN_ID.
+ *  Stagenet (52638) uses MONITOR_RPC_URL (the persistent stagenet endpoint).
+ *  Base Sepolia (84532) uses BASE_SEPOLIA_RPC_URL.
+ *  Base mainnet (8453) and Ethereum mainnet (1) use BASE_RPC_URL.
+ */
 function getRpcUrl(): string {
-  if (getChainId() === 84532) {
-    return process.env["BASE_SEPOLIA_RPC_URL"] ?? "https://sepolia.base.org";
-  }
+  const id = getChainId();
+  if (id === 84532) return process.env["BASE_SEPOLIA_RPC_URL"] ?? "https://sepolia.base.org";
+  if (id === 52638 || id === 1) return process.env["MONITOR_RPC_URL"] ?? process.env["BASE_RPC_URL"] ?? "https://mainnet.base.org";
   return process.env["BASE_RPC_URL"] ?? "https://mainnet.base.org";
 }
-function getChain()              { return getChainId() === 84532 ? baseSepolia : base; }
-function getSafeTxServiceUrl():  string {
+
+/** Returns the viem chain object for the active CHAIN_ID.
+ *  Stagenet (52638) is an Ethereum mainnet fork — must use `mainnet` for
+ *  correct EIP-155 signing, not the OP-stack `base` chain.
+ */
+function getChain() {
+  const id = getChainId();
+  if (id === 84532) return baseSepolia;
+  if (id === 52638 || id === 1) return mainnet;
+  return base;
+}
+
+function getSafeTxServiceUrl(): string {
+  const id = getChainId();
+  if (id === 84532) return process.env["SAFE_TX_SERVICE_URL"] ?? "https://api.safe.global/tx-service/basesep";
+  // stagenet (52638) has no dedicated Safe TX Service — prod Safe TX service is Base-only
+  // For stagenet, PolicyModule direct execution is used instead of Safe proposals
   return process.env["SAFE_TX_SERVICE_URL"] ?? "https://api.safe.global/tx-service/base";
 }
 function getModuleAddress(): Address {
@@ -483,10 +503,12 @@ export async function isPolicyModuleEnabled(): Promise<boolean> {
     const module  = process.env["MODULE_ADDRESS"];
     const safe    = process.env["SAFE_ADDRESS"];
     const chainId = parseInt(process.env["CHAIN_ID"] ?? "8453", 10);
-    const chain   = chainId === 84532 ? baseSepolia : base;
-    const rpcUrl  = chainId === 84532
-      ? (process.env["BASE_SEPOLIA_RPC_URL"] ?? "https://sepolia.base.org")
-      : (process.env["BASE_RPC_URL"] ?? "https://mainnet.base.org");
+    // Stagenet (52638) is an Ethereum mainnet fork — use mainnet chain type
+    const chain   = chainId === 84532 ? baseSepolia : chainId === 52638 || chainId === 1 ? mainnet : base;
+    const rpcUrl  =
+      chainId === 84532 ? (process.env["BASE_SEPOLIA_RPC_URL"] ?? "https://sepolia.base.org") :
+      chainId === 52638 || chainId === 1 ? (process.env["MONITOR_RPC_URL"] ?? process.env["BASE_RPC_URL"] ?? "https://mainnet.base.org") :
+      (process.env["BASE_RPC_URL"] ?? "https://mainnet.base.org");
 
     if (!module || !safe) return false;
 

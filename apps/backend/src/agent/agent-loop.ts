@@ -15,7 +15,7 @@
 // ============================================================
 
 import { randomUUID } from "node:crypto";
-import { createPublicClient, http, encodeFunctionData, parseUnits, keccak256, toBytes, type Address } from "viem";
+import { createPublicClient, http, encodeFunctionData, parseUnits, keccak256, toBytes, type Address, type Hex } from "viem";
 import { base, baseSepolia, mainnet } from "viem/chains";
 import {
   listOrgs,
@@ -48,6 +48,45 @@ import {
   getSafeExecutionStatus,
 } from "@defi-composer/execution-engine";
 import { buildSafeTxStruct } from "@defi-composer/simulation-engine";
+
+// ─── PolicyModule ABI (for stagenet eth_call proof) ───────────
+
+const POLICY_MODULE_PROOF_ABI = [
+  {
+    name: "canExecute",
+    type: "function" as const,
+    inputs: [
+      { name: "to",         type: "address"  },
+      { name: "usdcAmount", type: "uint256"  },
+    ],
+    outputs: [
+      { name: "",       type: "bool"    },
+      { name: "reason", type: "string"  },
+    ],
+    stateMutability: "view" as const,
+  },
+  {
+    name: "execute",
+    type: "function" as const,
+    inputs: [
+      { name: "to",                 type: "address" },
+      { name: "value",              type: "uint256" },
+      { name: "data",               type: "bytes"   },
+      { name: "operation",          type: "uint8"   },
+      { name: "simulationId",       type: "bytes32" },
+      { name: "declaredUsdcAmount", type: "uint256" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable" as const,
+  },
+  {
+    name: "executor",
+    type: "function" as const,
+    inputs: [],
+    outputs: [{ type: "address" }],
+    stateMutability: "view" as const,
+  },
+] as const;
 
 // ─── Config ───────────────────────────────────────────────────
 
@@ -185,6 +224,31 @@ const AAVE_POOL_ABI = [{
   stateMutability: "nonpayable" as const,
 }] as const;
 
+// ─── Stagenet proof — eth_call on PolicyModule.execute ────────
+//
+// Three-phase validation against the real persistent stagenet state:
+//
+//   Phase 1 — Balance check
+//     Reads USDC balance from stagenet. If insufficient, fail fast.
+//
+//   Phase 2 — Policy preflight (if MODULE_ADDRESS is set)
+//     Calls PolicyModule.canExecute(aavePool, amount) — a view function
+//     that checks active policy, approved targets, single-action cap, daily
+//     limit. Fails early if policy would block the action.
+//
+//   Phase 3 — Full eth_call + eth_estimateGas (if MODULE_ADDRESS is set)
+//     Simulates PolicyModule.execute() from the registered executor address.
+//     eth_call runs the full execution path (Safe → approve → supply) without
+//     committing to state. eth_estimateGas gives a real gas estimate.
+//     If this call reverts (Safe not set up, target not approved, etc.),
+//     the artifact is marked failed with the revert reason.
+//
+//   Fallback — Balance check only (if MODULE_ADDRESS not yet configured)
+//     Proof is weaker but still creates an honest audit record. The agent
+//     cannot execute until MODULE_ADDRESS is set.
+//
+// Result: rpcSource field records which proof tier was achieved.
+
 async function buildStagenetArtifact(job: SimJob, simId: string): Promise<{
   status: "passed" | "failed";
   failureReason?: string;
@@ -198,77 +262,181 @@ async function buildStagenetArtifact(job: SimJob, simId: string): Promise<{
   balancesBefore: Record<string, string>;
   balancesAfter: Record<string, string>;
 }> {
-  const rpcSource = process.env["MONITOR_RPC_URL"] ?? process.env["BASE_RPC_URL"] ?? "";
-  const contracts = getActiveContracts();
+  const rpcEndpoint = process.env["MONITOR_RPC_URL"] ?? process.env["BASE_RPC_URL"] ?? "";
+  const contracts   = getActiveContracts();
+  const amountRaw   = parseUnits(job.amountHuman, 6);
+  const treasury    = (job.onBehalfOf || job.safeAddress || "") as Address;
+  const moduleAddr  = process.env["MODULE_ADDRESS"] as Address | undefined;
 
-  const amountRaw = parseUnits(job.amountHuman, 6); // USDC has 6 decimals
-  const treasury = (job.onBehalfOf || job.safeAddress || "") as Address;
-
-  // Build the two-step calldata: approve + supply
-  const approveData = encodeFunctionData({
-    abi: ERC20_APPROVE_ABI,
-    functionName: "approve",
-    args: [contracts.AAVE_POOL, amountRaw],
-  });
-  const supplyData = encodeFunctionData({
-    abi: AAVE_POOL_ABI,
-    functionName: "supply",
-    args: [contracts.USDC, amountRaw, treasury, 0],
-  });
-
-  const inputCalldata = [
-    { to: contracts.USDC,      data: approveData, description: `Approve Aave Pool to spend ${job.amountHuman} USDC` },
-    { to: contracts.AAVE_POOL, data: supplyData,  description: `Supply ${job.amountHuman} USDC to Aave V3` },
-  ];
-
-  // Validate on stagenet via eth_call — uses real persistent state, no Anvil
+  // ── Phase 1: Balance check ────────────────────────────────────
+  let block: bigint;
+  let usdcBalance: bigint;
   try {
-    const block = await publicClient.getBlockNumber();
-    const forkBlockNumber = Number(block);
-    const validUntilBlock = forkBlockNumber + 300; // ~1 hr at 12s blocks
-
-    // Verify USDC balance is sufficient
-    const usdcBalance = await publicClient.readContract({
-      address: contracts.USDC, abi: ERC20_ABI,
-      functionName: "balanceOf", args: [treasury],
-    }) as bigint;
-
-    if (usdcBalance < amountRaw) {
-      return {
-        status: "failed",
-        failureReason: `Insufficient USDC: wallet has ${Number(usdcBalance) / 1e6} USDC, need ${job.amountHuman}`,
-        inputCalldata: [], expectedDeltas: {}, gasEstimate: 0,
-        forkBlockNumber, validUntilBlock, rpcSource,
-        calldataHash: "0x", balancesBefore: {}, balancesAfter: {},
-      };
-    }
-
-    const calldataHash = keccak256(toBytes(JSON.stringify(inputCalldata.map(c => ({ to: c.to.toLowerCase(), data: c.data })))));
-
-    return {
-      status: "passed",
-      inputCalldata,
-      expectedDeltas: {
-        USDC_spent:      `-${amountRaw.toString()}`,
-        aUSDC_received:   amountRaw.toString(),
-      },
-      gasEstimate: 250_000, // conservative estimate for approve + supply
-      forkBlockNumber,
-      validUntilBlock,
-      rpcSource,
-      calldataHash,
-      balancesBefore: { usdc: (Number(usdcBalance) / 1e6).toFixed(6) },
-      balancesAfter:  { usdc: ((Number(usdcBalance) - Number(amountRaw)) / 1e6).toFixed(6) },
-    };
+    [block, usdcBalance] = await Promise.all([
+      publicClient.getBlockNumber(),
+      publicClient.readContract({
+        address: contracts.USDC, abi: ERC20_ABI,
+        functionName: "balanceOf", args: [treasury],
+      }) as Promise<bigint>,
+    ]);
   } catch (err) {
     return {
       status: "failed",
-      failureReason: `Stagenet validation failed: ${err instanceof Error ? err.message : String(err)}`,
+      failureReason: `RPC read failed: ${err instanceof Error ? err.message : String(err)}`,
       inputCalldata: [], expectedDeltas: {}, gasEstimate: 0,
-      forkBlockNumber: 0, validUntilBlock: 0, rpcSource,
+      forkBlockNumber: 0, validUntilBlock: 0,
+      rpcSource: `${rpcEndpoint} (balance_read_error)`,
       calldataHash: "0x", balancesBefore: {}, balancesAfter: {},
     };
   }
+
+  const forkBlockNumber = Number(block);
+  const validUntilBlock = forkBlockNumber + 300; // ~1 hr at 12s/block
+
+  if (usdcBalance < amountRaw) {
+    return {
+      status: "failed",
+      failureReason: `Insufficient USDC: treasury has $${(Number(usdcBalance) / 1e6).toFixed(2)}, need $${job.amountHuman}`,
+      inputCalldata: [], expectedDeltas: {}, gasEstimate: 0,
+      forkBlockNumber, validUntilBlock,
+      rpcSource: `${rpcEndpoint} (balance_check)`,
+      calldataHash: "0x",
+      balancesBefore: { usdc: (Number(usdcBalance) / 1e6).toFixed(6) },
+      balancesAfter: {},
+    };
+  }
+
+  // ── Build calldata ─────────────────────────────────────────────
+  const approveData = encodeFunctionData({
+    abi: ERC20_APPROVE_ABI, functionName: "approve",
+    args: [contracts.AAVE_POOL, amountRaw],
+  });
+  const supplyData = encodeFunctionData({
+    abi: AAVE_POOL_ABI, functionName: "supply",
+    args: [contracts.USDC, amountRaw, treasury, 0],
+  });
+  const inputCalldata = [
+    { to: contracts.USDC,      data: approveData, description: `Approve Aave Pool to spend $${job.amountHuman} USDC` },
+    { to: contracts.AAVE_POOL, data: supplyData,  description: `Supply $${job.amountHuman} USDC to Aave V3 on behalf of ${treasury}` },
+  ];
+
+  const calldataHash = keccak256(toBytes(
+    JSON.stringify(inputCalldata.map(c => ({ to: c.to.toLowerCase(), data: c.data })))
+  ));
+  const balancesBefore = { usdc: (Number(usdcBalance) / 1e6).toFixed(6) };
+  const balancesAfter  = { usdc: ((Number(usdcBalance) - Number(amountRaw)) / 1e6).toFixed(6) };
+  const expectedDeltas = {
+    USDC_spent:     `-${amountRaw.toString()}`,
+    aUSDC_received:  amountRaw.toString(),
+  };
+
+  // ── Phase 2 & 3: PolicyModule proof (if deployed) ────────────
+  if (moduleAddr) {
+    try {
+      // Phase 2 — canExecute() policy preflight (view call, cheap)
+      const [canExec, policyReason] = await publicClient.readContract({
+        address: moduleAddr,
+        abi: POLICY_MODULE_PROOF_ABI,
+        functionName: "canExecute",
+        args: [contracts.AAVE_POOL as Address, amountRaw],
+      }) as [boolean, string];
+
+      if (!canExec) {
+        return {
+          status: "failed",
+          failureReason: `Policy check failed: ${policyReason}`,
+          inputCalldata, expectedDeltas, gasEstimate: 0,
+          forkBlockNumber, validUntilBlock,
+          rpcSource: `${rpcEndpoint} (policy_preflight_failed)`,
+          calldataHash, balancesBefore, balancesAfter,
+        };
+      }
+
+      // Phase 3 — Read executor address from module, then eth_call execute()
+      const executorAddr = await publicClient.readContract({
+        address: moduleAddr,
+        abi: POLICY_MODULE_PROOF_ABI,
+        functionName: "executor",
+      }) as Address;
+
+      // Build the MultiSend Safe tx (approve + supply packed together)
+      const safeTxStruct = buildSafeTxStruct(inputCalldata, 0);
+
+      // Encode the full PolicyModule.execute() call
+      const simIdBytes = `0x${simId.replace(/-/g, "").padEnd(64, "0").slice(0, 64)}` as Hex;
+      const executeCalldata = encodeFunctionData({
+        abi: POLICY_MODULE_PROOF_ABI,
+        functionName: "execute",
+        args: [
+          safeTxStruct.to  as Address,
+          BigInt(safeTxStruct.value),
+          safeTxStruct.data as Hex,
+          safeTxStruct.operation,
+          simIdBytes,
+          amountRaw,
+        ],
+      });
+
+      // eth_call — full execution simulation, no state mutation
+      await publicClient.call({
+        to:      moduleAddr,
+        data:    executeCalldata,
+        account: executorAddr,
+      });
+
+      // eth_estimateGas — real gas measurement
+      const gasEst = await publicClient.estimateGas({
+        to:      moduleAddr,
+        data:    executeCalldata,
+        account: executorAddr,
+      });
+
+      return {
+        status: "passed",
+        inputCalldata,
+        expectedDeltas,
+        gasEstimate:    Number(gasEst),
+        forkBlockNumber,
+        validUntilBlock,
+        rpcSource: `${rpcEndpoint} (policy_module_eth_call block=${forkBlockNumber})`,
+        calldataHash,
+        balancesBefore,
+        balancesAfter,
+      };
+
+    } catch (proofErr) {
+      const reason = proofErr instanceof Error ? proofErr.message : String(proofErr);
+      return {
+        status: "failed",
+        failureReason: `PolicyModule execution would revert: ${reason.slice(0, 300)}`,
+        inputCalldata, expectedDeltas, gasEstimate: 0,
+        forkBlockNumber, validUntilBlock,
+        rpcSource: `${rpcEndpoint} (policy_module_eth_call_failed)`,
+        calldataHash, balancesBefore, balancesAfter,
+      };
+    }
+  }
+
+  // ── Fallback: balance check only (MODULE_ADDRESS not yet configured) ─
+  // The agent will not attempt execution without a module address.
+  // This still creates an honest audit record showing the opportunity detected.
+  console.warn(
+    `[Agent] MODULE_ADDRESS not set — stagenet proof is balance-check-only. ` +
+    `Deploy PolicyEnforcedModule and set MODULE_ADDRESS to enable real execution.`
+  );
+
+  return {
+    status: "passed",
+    inputCalldata,
+    expectedDeltas,
+    gasEstimate: 250_000, // conservative estimate — real gas unmeasured without module
+    forkBlockNumber,
+    validUntilBlock,
+    rpcSource: `${rpcEndpoint} (balance_check_only — MODULE_ADDRESS not set)`,
+    calldataHash,
+    balancesBefore,
+    balancesAfter,
+  };
 }
 
 // ─── Core simulation + execution ──────────────────────────────
@@ -396,13 +564,20 @@ async function runSimulation(job: SimJob): Promise<void> {
     const deployedUsd = rawAmt > 1e12 ? rawAmt / 1e18 : rawAmt > 0 ? rawAmt / 1e6 : parseFloat(amountHuman);
     const positionId = `pos_${randomUUID().slice(0, 12)}`;
 
+    // ── Determine proof tier for display ─────────────────────────
+    const proofTier = (artifact.rpcSource ?? "").includes("policy_module_eth_call")
+      ? "eth_call_proven"
+      : (artifact.rpcSource ?? "").includes("balance_check_only")
+        ? "balance_check_only"
+        : "fork_simulation";
+
     await createPosition({
       id: positionId,
       orgId,
       graph: {
         id: `graph_${positionId}`,
-        name: `${playbook.replace(/_/g, " ")} (fork proven)`,
-        description: `Fork-simulated ${playbook} at block ${artifact.forkBlockNumber}`,
+        name: `${playbook.replace(/_/g, " ")} (proof pending)`,
+        description: `Stagenet proof at block ${artifact.forkBlockNumber} — awaiting execution`,
         entryAsset: "USDC",
         exitAsset: "USDC",
         nodes: [{
@@ -414,14 +589,17 @@ async function runSimulation(job: SimJob): Promise<void> {
           expectedApyBps: 450,
           gasCostUsd: artifact.gasEstimate * 3e-9,
           risks: [],
-          metadata: { forkBlock: artifact.forkBlockNumber },
+          metadata: { forkBlock: artifact.forkBlockNumber, proofTier },
         }],
         edges: [],
         estimatedApyBps: 450,
         totalGasCostUsd: artifact.gasEstimate * 3e-9,
         createdAt: new Date(),
       },
-      status: "active",
+      // "simulating" status = proof created, NOT yet deployed on-chain.
+      // Only reconciliation (real tx hash confirmed) promotes to "active".
+      // This prevents phantom positions showing as deployed capital.
+      status: "simulating",
       chainId: activeChainId,
       entryValueUsd: deployedUsd,
       currentValueUsd: deployedUsd,
@@ -429,8 +607,8 @@ async function runSimulation(job: SimJob): Promise<void> {
       safeAddress: safeAddress ?? null,
       mandateVersionId,
       simulationArtifactId: simulationId,
-      tags: ["fork_simulation"],
-      notes: `Fork-proven at block ${artifact.forkBlockNumber}. Gas: ${artifact.gasEstimate.toLocaleString()}`,
+      tags: [proofTier],
+      notes: `Proof: ${proofTier} at block ${artifact.forkBlockNumber}. Gas estimate: ${artifact.gasEstimate.toLocaleString()}. Deploy MODULE_ADDRESS + EXECUTOR_PRIVATE_KEY in Railway to enable real execution.`,
     });
 
     await updateAgentDecisionStatus(decisionId, "ready").catch(() => {});

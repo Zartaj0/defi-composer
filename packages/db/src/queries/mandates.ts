@@ -205,12 +205,17 @@ export async function mandateHasPendingWork(
   });
   if (activeDecision !== undefined) return true;
 
-  // Also check for "ready" decisions with un-executed execution records
-  // (prevents duplicate proposals while Safe TX is pending multisig approval)
+  // Also block on "ready" decisions within a 6-hour window.
+  // "ready" means simulation passed + execution record created (Safe proposal submitted
+  // OR fork proof created). Block for up to 6h to prevent duplicate proposals while
+  // Safe owners are signing. After 6h, treat the record as stale/abandoned and allow
+  // a fresh scan — this prevents permanent deadlock if owners never sign.
+  const readyCutoff = new Date(Date.now() - 6 * 60 * 60 * 1000); // 6 hours
   const readyDecision = await db.query.agentDecisions.findFirst({
     where: and(
       eq(agentDecisions.mandateId, mandateId),
       inArray(agentDecisions.status, ["ready"]),
+      gte(agentDecisions.updatedAt, readyCutoff),
     ),
     columns: { id: true },
   });

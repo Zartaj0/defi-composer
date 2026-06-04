@@ -1,18 +1,18 @@
 // ============================================================
 // Simulation Routes
-// POST /api/v1/simulations       — enqueue fork simulation job
-// GET  /api/v1/simulations/:id   — poll simulation artifact
+// POST /api/v1/simulations       — run simulation inline (Redis-free)
+// GET  /api/v1/simulations/:id   — fetch simulation artifact
 // GET  /api/v1/simulations/mandate/:mandateId — list for mandate
 // ============================================================
 
 import type { FastifyPluginAsync } from "fastify";
 import { v4 as uuidv4 } from "uuid";
 import { isAddress, createPublicClient, http } from "viem";
-import { Queue } from "bullmq";
 import {
   getMandate,
   getOrg,
   getSimulationArtifact,
+  createSimulationArtifact,
   createExecutionRecord,
   listSimulationsForMandate,
   listDecisionsForMandate,
@@ -26,24 +26,13 @@ import {
 import type { ApiResponse } from "@defi-composer/shared";
 import type { PlaybookName } from "@defi-composer/simulation-engine";
 import {
+  mandateSimulator,
   buildSafeTxStruct,
   encodeSafeTxForSigning,
   createFallbackTransport,
+  getActiveChainId,
+  getActiveContracts,
 } from "@defi-composer/simulation-engine";
-
-// Inline job payload — mirrors mandate-executor.ts, avoids cross-service import
-interface MandateSimulationJobPayload {
-  orgId: string;
-  mandateId: string;
-  playbook: PlaybookName;
-  amountHuman: string;
-  trigger: string;
-  explanation: string;
-  observedLiquidUsd: number;
-  existingDecisionId?: string;
-}
-
-const REDIS_URL = process.env["REDIS_URL"] ?? "redis://localhost:6379";
 
 const VALID_PLAYBOOKS: PlaybookName[] = [
   "aave_supply_usdc",
@@ -53,12 +42,29 @@ const VALID_PLAYBOOKS: PlaybookName[] = [
   "uniswap_weth_to_usdc",
 ];
 
-const simulationQueue = new Queue<MandateSimulationJobPayload>("mandate-simulation", {
-  connection: {
-    host: new URL(REDIS_URL).hostname,
-    port: parseInt(new URL(REDIS_URL).port || "6379"),
-  },
-});
+// ── Chain-aware helpers ────────────────────────────────────────
+
+/** Returns the Safe TX Service URL for the active chain. */
+function getSafeTxServiceUrl(chainId: number): string {
+  if (chainId === 84532) return "https://api.safe.global/tx-service/basesep";
+  if (chainId === 8453)  return "https://api.safe.global/tx-service/base";
+  // stagenet (52638) and Ethereum mainnet (1) don't have a public Safe TX Service.
+  // Direct PolicyModule execution is used instead.
+  return process.env["SAFE_TX_SERVICE_URL"] ?? "https://api.safe.global/tx-service/base";
+}
+
+/** Returns the MultiSendCallOnly address for the active chain. */
+function getMultiSendAddress(chainId: number): string {
+  // v1.4.1 is deployed at the same address via CREATE2 on all chains where Safe is supported
+  return "0x9641d764fc13c8B624c04430C7356C1C7C8102e2";
+}
+
+/** Returns chain-aware RPC URL. */
+function getChainRpcUrl(chainId: number): string {
+  if (chainId === 84532) return process.env["BASE_SEPOLIA_RPC_URL"] ?? "https://sepolia.base.org";
+  if (chainId === 52638 || chainId === 1) return process.env["MONITOR_RPC_URL"] ?? process.env["BASE_RPC_URL"] ?? "https://mainnet.base.org";
+  return process.env["BASE_RPC_URL"] ?? "https://mainnet.base.org";
+}
 
 interface RunSimulationBody {
   mandateId: string;
@@ -143,55 +149,106 @@ export const simulationRoutes: FastifyPluginAsync = async (app) => {
         } satisfies ApiResponse<never>);
       }
 
-      // If no onBehalfOf provided, default to the org's Safe address so generated
-      // calldata correctly names the Safe as beneficiary/recipient.
+      // Default onBehalfOf to the org's Safe address (or first wallet) so calldata
+      // names the correct treasury as beneficiary/recipient.
       const org = await getOrg(mandate.orgId).catch(() => null);
-      const resolvedOnBehalfOf = onBehalfOf ?? org?.safeAddress ?? undefined;
+      const walletAddress = (org as { wallets?: Array<{ address: string }> } | null)?.wallets?.[0]?.address;
+      const resolvedOnBehalfOf = onBehalfOf ?? org?.safeAddress ?? walletAddress ?? undefined;
 
-      // Enqueue simulation job
-      const job = await simulationQueue.add(
-        "run-simulation",
-        {
-          orgId: mandate.orgId,
-          mandateId,
+      // Resolve active mandate version for policy fields
+      const activeVersion =
+        mandate.versions.find(v => v.id === mandate.activeVersionId) ??
+        mandate.versions[0];
+
+      if (!activeVersion) {
+        return reply.status(422).send({
+          success: false,
+          error: "Mandate has no active version",
+          requestId,
+          timestamp: new Date(),
+        } satisfies ApiResponse<never>);
+      }
+
+      // ── Run simulation inline (Redis-free) ────────────────────
+      // The agent loop handles autonomous simulation. This route is for
+      // manual / on-demand simulation (testing, dashboard triggers).
+      app.log.info({ mandateId, playbook, amountHuman }, "Running inline simulation");
+
+      let artifact;
+      try {
+        artifact = await mandateSimulator.run({
           playbook,
-          amountHuman,
-          trigger,
-          explanation,
-          observedLiquidUsd,
-          ...(resolvedOnBehalfOf ? { onBehalfOf: resolvedOnBehalfOf } : {}),
-        },
-        {
-          attempts: 2,
-          backoff: { type: "fixed", delay: 5_000 },
-        }
-      );
+          mandate: {
+            mandateVersionId: activeVersion.id,
+            approvedAssets:    activeVersion.approvedAssets    as string[],
+            approvedProtocols: activeVersion.approvedProtocols as string[],
+            approvedActions:   activeVersion.approvedActions   as string[],
+            blockedActions:    activeVersion.blockedActions    as string[],
+            maxSlippageBps:    activeVersion.maxSlippageBps    as number,
+            ...(activeVersion.maxSingleActionUsd != null ? { maxSingleActionUsd: activeVersion.maxSingleActionUsd as number } : {}),
+            reserveFloorUsd:   activeVersion.reserveFloorUsd   as number,
+          },
+          params: {
+            amountHuman,
+            ...(resolvedOnBehalfOf ? { onBehalfOf: resolvedOnBehalfOf as `0x${string}` } : {}),
+          },
+          observedState: { liquidUsd: observedLiquidUsd },
+          orgId: mandate.orgId,
+        });
+      } catch (simErr) {
+        app.log.error({ simErr, mandateId, playbook }, "Simulation failed");
+        return reply.status(500).send({
+          success: false,
+          error: `Simulation failed: ${simErr instanceof Error ? simErr.message : String(simErr)}`,
+          requestId,
+          timestamp: new Date(),
+        } satisfies ApiResponse<never>);
+      }
+
+      // Persist the artifact
+      await createSimulationArtifact({
+        id: artifact.id,
+        orgId: artifact.orgId,
+        decisionId: artifact.decisionId,
+        mandateVersionId: artifact.mandateVersionId,
+        chainId: artifact.chainId,
+        forkBlockNumber: artifact.forkBlockNumber,
+        validUntilBlock: artifact.validUntilBlock,
+        rpcSource: artifact.rpcSource,
+        calldataHash: artifact.calldataHash,
+        inputCalldata: artifact.inputCalldata,
+        balancesBefore: artifact.balancesBefore,
+        balancesAfter: artifact.balancesAfter,
+        expectedDeltas: artifact.expectedDeltas,
+        gasEstimate: artifact.gasEstimate,
+        status: artifact.status,
+        ...(artifact.failureReason ? { failureReason: artifact.failureReason } : {}),
+      });
 
       app.log.info(
-        { jobId: job.id, mandateId, playbook, amountHuman },
-        "Simulation job enqueued"
+        { simulationId: artifact.id, status: artifact.status, mandateId, playbook },
+        "Simulation complete"
       );
 
-      return reply.status(202).send({
+      return reply.status(201).send({
         success: true,
         data: {
-          jobId: job.id,
+          simulationId:   artifact.id,
+          status:         artifact.status,
           mandateId,
           playbook,
           amountHuman,
-          observedLiquidUsd,
-          statusMessage: "Simulation queued. Poll /api/v1/simulations/job/:jobId for result.",
+          gasEstimate:    artifact.gasEstimate,
+          forkBlockNumber: artifact.forkBlockNumber,
+          calldataHash:   artifact.calldataHash,
+          failureReason:  artifact.failureReason ?? null,
+          message: artifact.status === "passed"
+            ? `Simulation passed at block ${artifact.forkBlockNumber}. Fetch /${artifact.id}/safe-proposal for the Safe tx payload.`
+            : `Simulation failed: ${artifact.failureReason}`,
         },
         requestId,
         timestamp: new Date(),
-      } satisfies ApiResponse<{
-        jobId: string | undefined;
-        mandateId: string;
-        playbook: PlaybookName;
-        amountHuman: string;
-        observedLiquidUsd: number;
-        statusMessage: string;
-      }>);
+      });
     }
   );
 
@@ -301,9 +358,11 @@ export const simulationRoutes: FastifyPluginAsync = async (app) => {
 
       const safeTxStruct = buildSafeTxStruct(rawCalldata, artifact.gasEstimate);
 
-      // EIP-712 payload — use safeAddress from query or a placeholder if not given
+      // EIP-712 payload — chainId comes from the artifact (where the simulation ran),
+      // not hardcoded. Stagenet is 52638, Base mainnet is 8453, etc.
+      const artifactChainId = artifact.chainId;
       const effectiveSafeAddress = safeAddress ?? "0x0000000000000000000000000000000000000000";
-      const eip712Payload = encodeSafeTxForSigning(safeTxStruct, effectiveSafeAddress, 8453);
+      const eip712Payload = encodeSafeTxForSigning(safeTxStruct, effectiveSafeAddress, artifactChainId);
 
       return reply.status(200).send({
         success: true,
@@ -319,54 +378,16 @@ export const simulationRoutes: FastifyPluginAsync = async (app) => {
           eip712Payload,
           // Helpful metadata for the frontend
           meta: {
-            safeTransactionServiceUrl: "https://safe-transaction-base.safe.global",
-            multiSendCallOnly: "0x9641d764fc13c8B624c04430C7356C1C7C8102e2",
-            chainId: 8453,
+            safeTransactionServiceUrl: getSafeTxServiceUrl(artifactChainId),
+            multiSendCallOnly: getMultiSendAddress(artifactChainId),
+            chainId: artifactChainId,
             isBatch: rawCalldata.length > 1,
             txCount: rawCalldata.length,
-            forkMode: true,
             note: safeAddress === undefined
               ? "safeAddress not provided — eip712Payload.domain.verifyingContract is address(0). " +
                 "Pass ?safeAddress=0x... to get a signable payload."
               : "Replace safeTxStruct.nonce with the real Safe nonce before signing.",
           },
-        },
-        requestId,
-        timestamp: new Date(),
-      });
-    }
-  );
-
-  // ── GET /job/:jobId — poll job status and result ──────────────
-  app.get<{ Params: { jobId: string } }>(
-    "/job/:jobId",
-    async (request, reply) => {
-      const requestId = uuidv4();
-      const { jobId } = request.params;
-
-      const job = await simulationQueue.getJob(jobId);
-      if (!job) {
-        return reply.status(404).send({
-          success: false,
-          error: `Simulation job ${jobId} not found`,
-          requestId,
-          timestamp: new Date(),
-        } satisfies ApiResponse<never>);
-      }
-
-      const state = await job.getState();
-      const progress = job.progress;
-      const result = job.returnvalue;
-      const failedReason = job.failedReason;
-
-      return reply.status(200).send({
-        success: true,
-        data: {
-          jobId,
-          state,
-          progress,
-          result: result ?? null,
-          failedReason: failedReason ?? null,
         },
         requestId,
         timestamp: new Date(),
@@ -602,7 +623,7 @@ export const simulationRoutes: FastifyPluginAsync = async (app) => {
           policy: { maxSingleActionUsdc: string; dailyLimitUsdc: string; reserveFloorUsdc: string } | null;
         } = {
           safeAddress,
-          chainId: parseInt(process.env["CHAIN_ID"] ?? "84532", 10),
+          chainId: parseInt(process.env["CHAIN_ID"] ?? "8453", 10),
           moduleAddress: process.env["MODULE_ADDRESS"] ?? null,
           moduleEnabled: false,
           usdcBalance: null,
@@ -612,10 +633,8 @@ export const simulationRoutes: FastifyPluginAsync = async (app) => {
 
         if (treasuryAddress) {
           try {
-            const chainId = parseInt(process.env["CHAIN_ID"] ?? "84532", 10);
-            const rpcUrl  = chainId === 84532
-              ? (process.env["BASE_SEPOLIA_RPC_URL"] ?? "https://sepolia.base.org")
-              : (process.env["BASE_RPC_URL"] ?? "https://mainnet.base.org");
+            const chainId = parseInt(process.env["CHAIN_ID"] ?? "8453", 10);
+            const rpcUrl  = getChainRpcUrl(chainId);
             const moduleAddr = process.env["MODULE_ADDRESS"] ?? "";
 
             // Use the explicitly computed rpcUrl (chain-aware), NOT createFallbackTransport()

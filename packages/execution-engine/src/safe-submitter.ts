@@ -27,7 +27,7 @@ import {
   type Hex,
   type Address,
 } from "viem";
-import { base, baseSepolia } from "viem/chains";
+import { base, baseSepolia, mainnet } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import type { SafeTxStruct, SafeTxEip712 } from "@defi-composer/simulation-engine";
 import { encodeSafeTxForSigning } from "@defi-composer/simulation-engine";
@@ -46,17 +46,22 @@ function getChainId(): number {
   return parseInt(process.env["CHAIN_ID"] ?? "8453", 10);
 }
 
-/** Viem chain object matching CHAIN_ID. */
+/** Viem chain object matching CHAIN_ID.
+ *  Stagenet (52638) is an Ethereum mainnet fork — must use `mainnet`, not `base`.
+ */
 function getChain() {
-  return getChainId() === 84532 ? baseSepolia : base;
+  const id = getChainId();
+  if (id === 84532) return baseSepolia;
+  if (id === 52638 || id === 1) return mainnet;
+  return base;
 }
 
-/** Base RPC URL: BASE_RPC_URL env or chain default. */
+/** RPC URL matching the active CHAIN_ID. */
 function getRpcUrl(): string {
-  return (
-    process.env["BASE_RPC_URL"] ??
-    (getChainId() === 84532 ? "https://sepolia.base.org" : "https://mainnet.base.org")
-  );
+  const id = getChainId();
+  if (id === 84532) return process.env["BASE_SEPOLIA_RPC_URL"] ?? "https://sepolia.base.org";
+  if (id === 52638 || id === 1) return process.env["MONITOR_RPC_URL"] ?? process.env["BASE_RPC_URL"] ?? "https://mainnet.base.org";
+  return process.env["BASE_RPC_URL"] ?? "https://mainnet.base.org";
 }
 
 // ─── Types ────────────────────────────────────────────────────
