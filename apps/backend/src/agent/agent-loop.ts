@@ -534,13 +534,18 @@ async function scanOrg(orgId: string, safeAddress: string | null, walletAddress:
   let aUsdcBalance: number;
 
   try {
-    [usdcBalance, aUsdcBalance] = await Promise.all([
-      readUsdcBalance(treasuryAddress),
-      readAUsdcBalance(treasuryAddress),
-    ]);
+    usdcBalance = await readUsdcBalance(treasuryAddress);
   } catch (err) {
-    console.error(`[Agent] Balance read failed for org=${orgId}: ${(err as Error).message}`);
+    console.error(`[Agent] USDC balance read failed for org=${orgId}: ${(err as Error).message}`);
     return;
+  }
+
+  // aUSDC may not exist yet (token only exists after someone supplies to Aave).
+  // Treat a missing / undeployed token as 0 — it just means no position yet.
+  try {
+    aUsdcBalance = await readAUsdcBalance(treasuryAddress);
+  } catch {
+    aUsdcBalance = 0;
   }
 
   const reserveFloor = activeVersion.reserveFloorUsd as number;
